@@ -97,6 +97,8 @@ $env:DATABASE_URL = "sqlite:///./stockpilot.db"
 
 The command creates a timestamped, non-overwriting copy in `backups\` and checks its SQLite integrity. Confirm that the path is on a protected drive and that the backup is retained before proceeding. Then apply the migration explicitly:
 
+The backup command prints both the resolved absolute source path and the generated backup path. It reserves each backup filename with an exclusive filesystem create, so a timestamp collision fails without opening the existing file. If the copy or its integrity check fails, cleanup is limited to the same filesystem object this invocation reserved.
+
 ```powershell
 ..\..\.venv\Scripts\python.exe -m app.init_db
 ```
@@ -117,3 +119,5 @@ Install the added migration dependency and run tests from the project directory:
 ```
 
 Migration tests build disposable SQLite databases and do not upgrade the application's configured database.
+
+Relative SQLite URLs currently resolve from the process working directory for the application, backup, and Alembic commands. The backup utility reports the resolved source path so the operator can verify the target. A future project-root strategy could resolve relative SQLite paths against the project directory in shared configuration, with explicit absolute URLs continuing to take precedence. Adopting that strategy would change which database is selected when commands are launched outside the project directory; it should be a separately reviewed compatibility change with tests for both working-directory cases before rollout. For now, use an explicit absolute `DATABASE_URL` or launch commands from the project directory.
