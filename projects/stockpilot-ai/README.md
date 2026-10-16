@@ -121,3 +121,28 @@ Install the added migration dependency and run tests from the project directory:
 Migration tests build disposable SQLite databases and do not upgrade the application's configured database.
 
 Relative SQLite URLs currently resolve from the process working directory for the application, backup, and Alembic commands. The backup utility reports the resolved source path so the operator can verify the target. A future project-root strategy could resolve relative SQLite paths against the project directory in shared configuration, with explicit absolute URLs continuing to take precedence. Adopting that strategy would change which database is selected when commands are launched outside the project directory; it should be a separately reviewed compatibility change with tests for both working-directory cases before rollout. For now, use an explicit absolute `DATABASE_URL` or launch commands from the project directory.
+
+## Milestone 3B: Authentication and form security
+
+Business pages require an administrator sign-in. Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes; there is no default account or password. The first administrator is created explicitly after the database has been backed up and upgraded through the normal migration process. From the project directory, configure the selected database and a long random session key, then run:
+
+```powershell
+Set-Location C:\Users\User\ai-engineering\projects\stockpilot-ai
+$env:DATABASE_URL = "sqlite:///./stockpilot.db"
+$env:STOCKPILOT_SECRET_KEY = (& ..\..\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))")
+$env:STOCKPILOT_COOKIE_SECURE = "false" # Local HTTP development only
+..\..\.venv\Scripts\python.exe -m app.backup_db
+..\..\.venv\Scripts\python.exe -m app.init_db
+..\..\.venv\Scripts\python.exe -m app.create_admin
+..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+The backup and migration commands above are explicit; application startup does not migrate the database. Verify the printed backup path and target database before continuing. `app.create_admin` prompts for the username and password without echoing the password, confirms it, and stores only its hash. Do not put the generated session key or administrator password in source control. Keep the same secret key between restarts so active sessions remain valid; rotate it to invalidate all sessions. For deployment, provide `STOCKPILOT_SECRET_KEY` through the hosting environment or secret manager, terminate TLS, and leave `STOCKPILOT_COOKIE_SECURE=true` (the default). Setting it to `false` is only for local plain-HTTP development.
+
+The session cookie is HTTP-only, SameSite=Lax, secure by default, and expires after eight hours. Login and logout as well as all product, stock, sales, and coverage forms require a session CSRF token. Login failures use the same message for unknown users and incorrect passwords. A process-local limiter allows five failed attempts per client address in a 15-minute window and temporarily blocks further attempts. It is not shared between multiple workers or machines; use a shared proxy/application rate limiter before running multiple workers. Account recovery, password reset, multi-factor authentication, and a web-based account-management page are not included.
+
+Run all tests (they configure isolated temporary SQLite databases and test-only credentials):
+
+```powershell
+..\..\.venv\Scripts\python.exe -m pytest
+```

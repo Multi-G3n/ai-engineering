@@ -15,6 +15,7 @@ from app.models import InventoryMovement, Product, SalesRecord, SalesTrackingDay
 from app.schemas import SaleInput
 from app.services import (DemandRangeError, daily_demand_summary, mark_sales_day_complete,
                           record_sale)
+from conftest import add_test_admin, login_test_client, reset_login_limiter
 
 
 @pytest.fixture
@@ -28,9 +29,13 @@ def sales_env(tmp_path):
             yield db
 
     app.dependency_overrides[get_db] = override_db
-    with TestClient(app) as client:
+    add_test_admin(session_factory)
+    reset_login_limiter()
+    with TestClient(app, base_url="https://testserver") as client:
+        login_test_client(client)
         yield client, session_factory
     app.dependency_overrides.clear()
+    reset_login_limiter()
     Base.metadata.drop_all(engine)
     engine.dispose()
 

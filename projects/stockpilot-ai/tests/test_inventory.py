@@ -5,6 +5,7 @@ import pytest
 
 from app.database import Base, get_db
 from app.main import app
+from conftest import add_test_admin, login_test_client, reset_login_limiter
 
 
 @pytest.fixture
@@ -18,9 +19,13 @@ def client(tmp_path):
             yield db
 
     app.dependency_overrides[get_db] = override_db
-    with TestClient(app) as test_client:
+    add_test_admin(TestingSession)
+    reset_login_limiter()
+    with TestClient(app, base_url="https://testserver") as test_client:
+        login_test_client(test_client)
         yield test_client
     app.dependency_overrides.clear()
+    reset_login_limiter()
     Base.metadata.drop_all(engine)
     engine.dispose()
 

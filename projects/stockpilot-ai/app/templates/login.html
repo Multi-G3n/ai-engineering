@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · StockPilot AI</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/security.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <a class="brand login-brand" href="/">
+      <span class="brand-mark">S</span><span>StockPilot<small>INVENTORY</small></span>
+    </a>
+    <p class="eyebrow">SECURE WORKSPACE</p>
+    <h1>Sign in</h1>
+    <p class="login-intro">Use your StockPilot administrator account to continue.</p>
+    {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="login-form">
+      {% include "_csrf_field.html" %}
+      <label>Username<input name="username" required maxlength="64" autocomplete="username"></label>
+      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="button primary" type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>
