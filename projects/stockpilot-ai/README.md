@@ -84,3 +84,36 @@ Run the full test suite, including sales transaction, data coverage, persistence
 - **Database location looks unexpected**: SQLite's relative URL is relative to the process working directory. Set `DATABASE_URL` to an absolute SQLite URL or start the app from the project folder.
 - **PowerShell activation is blocked**: skip activation and invoke `..\..\.venv\Scripts\python.exe` directly.
 - **Port 8000 is busy**: add `--port 8001` to the Uvicorn command.
+
+## Milestone 2B: Integrity and migrations
+
+The schema is versioned with Alembic. Application startup does not migrate the database. Before upgrading an existing business database, stop the application and create a verified SQLite backup:
+
+```powershell
+Set-Location C:\Users\User\ai-engineering\projects\stockpilot-ai
+$env:DATABASE_URL = "sqlite:///./stockpilot.db"
+..\..\.venv\Scripts\python.exe -m app.backup_db
+```
+
+The command creates a timestamped, non-overwriting copy in `backups\` and checks its SQLite integrity. Confirm that the path is on a protected drive and that the backup is retained before proceeding. Then apply the migration explicitly:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m app.init_db
+```
+
+`app.init_db` runs `alembic upgrade head`; alternatively use `..\..\.venv\Scripts\python.exe -m alembic upgrade head`. Set `DATABASE_URL` to the exact same database for the backup and migration commands. The migration preserves existing product and movement rows, creates missing sales tables, and adds nullable linkage and idempotency columns. It links an old sale to a movement only when the historical movement reason, product, quantity, and unique match identify one sale confidently. Ambiguous or unmatched historical rows remain unlinked.
+
+The migration has no downgrade because dropping linkage or idempotency fields/tables can discard business data. To reverse an upgrade, stop the application and restore the verified pre-upgrade database backup as a whole. This also discards changes made after the backup. Do not restore over a database that has since received new business activity without first preserving that newer file.
+
+Each displayed sale form includes a unique idempotency token. A retry with the same token is rejected with a clear message and cannot create another sale or stock deduction; a refreshed form receives a new token, so two genuine identical sales remain valid. A database uniqueness constraint protects the token across concurrent submissions. Sales, stock deduction, linked movement, and optional coverage marker commit in one transaction. SQLite foreign-key checking is enabled on every SQLAlchemy connection.
+
+Demand summaries accept at most 3,660 inclusive dates (10 years). A tracked date with no sale is an observed zero; an untracked date remains unknown.
+
+Install the added migration dependency and run tests from the project directory:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+..\..\.venv\Scripts\python.exe -m pytest
+```
+
+Migration tests build disposable SQLite databases and do not upgrade the application's configured database.

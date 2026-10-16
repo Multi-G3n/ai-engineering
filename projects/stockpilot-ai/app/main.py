@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from pathlib import Path
+from uuid import uuid4
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, Query, Request
@@ -15,6 +16,8 @@ from app.models import InventoryMovement, Product, SalesRecord
 from app.schemas import AdjustmentInput, ProductInput, SaleInput, SalesTrackingInput
 from app.services import (
     DuplicateSKUError,
+    DuplicateSaleError,
+    DemandRangeError,
     InsufficientStockError,
     InvalidAdjustmentError,
     ProductNotFoundError,
@@ -157,7 +160,10 @@ def sales_context(request: Request, db: Session, product_id: int | None, start_d
     if end_date < start_date:
         range_error = "End date must be on or after start date."
     elif selected_product is not None:
-        summary = daily_demand_summary(db, selected_product.id, start_date, end_date)
+        try:
+            summary = daily_demand_summary(db, selected_product.id, start_date, end_date)
+        except DemandRangeError as exc:
+            range_error = str(exc)
         recent_sales = db.scalars(
             select(SalesRecord)
             .where(SalesRecord.product_id == selected_product.id)
@@ -176,7 +182,7 @@ def sales_context(request: Request, db: Session, product_id: int | None, start_d
         sale_error=sale_error,
         tracking_error=tracking_error,
         range_error=range_error,
-        form_values=form_values or {},
+        form_values={"idempotency_key": str(uuid4()), **(form_values or {})},
     )
 
 
@@ -190,13 +196,15 @@ def sales_page(request: Request, product_id: int | None = None, start_date: date
 @app.post("/sales", response_class=HTMLResponse)
 def create_sale_route(request: Request, product_id: str = Form(...), quantity_sold: str = Form(...),
                       sale_date: str = Form(...), unit_selling_price: str = Form(""),
-                      mark_day_complete: bool = Form(False), db: Session = Depends(get_db)):
+                      mark_day_complete: bool = Form(False), idempotency_key: str = Form(...),
+                      db: Session = Depends(get_db)):
     form_values = {"product_id": product_id, "quantity_sold": quantity_sold,
                    "sale_date": sale_date, "unit_selling_price": unit_selling_price,
-                   "mark_day_complete": mark_day_complete}
+                   "mark_day_complete": mark_day_complete, "idempotency_key": idempotency_key}
     try:
         data = SaleInput(product_id=product_id, quantity_sold=quantity_sold, sale_date=sale_date,
-                         unit_selling_price=unit_selling_price, mark_day_complete=mark_day_complete)
+                         unit_selling_price=unit_selling_price, mark_day_complete=mark_day_complete,
+                         idempotency_key=idempotency_key)
         record_sale(db, data)
     except ValidationError as exc:
         error = " ".join(item["msg"] for item in exc.errors())
@@ -205,7 +213,7 @@ def create_sale_route(request: Request, product_id: str = Form(...), quantity_so
         today = date.today()
         return sales_context(request, db, selected_id, today - timedelta(days=13), today,
                              sale_error=error, form_values=form_values)
-    except (InsufficientStockError, ProductNotFoundError) as exc:
+    except (InsufficientStockError, ProductNotFoundError, DuplicateSaleError) as exc:
         today = date.today()
         product_value = form_values.get("product_id")
         selected_id = int(product_value) if product_value.isdigit() else None

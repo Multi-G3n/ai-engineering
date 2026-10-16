@@ -2,8 +2,8 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.database import Base, SessionLocal, engine
-from app import models  # noqa: F401
+from app.database import SessionLocal
+from app.init_db import main as migrate_database
 from app.models import InventoryMovement, Product
 
 SAMPLES = [
@@ -16,7 +16,7 @@ SAMPLES = [
 
 
 def main():
-    Base.metadata.create_all(bind=engine)
+    migrate_database()
     with SessionLocal() as db:
         if db.scalar(select(Product.id).limit(1)) is not None:
             print("Products already exist; no sample data added.")

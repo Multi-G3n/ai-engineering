@@ -3,7 +3,7 @@
 <div class="notice"><strong>Historical data quality</strong><span>A date is a confirmed zero only after you mark tracking complete. Dates without that confirmation remain unknown; recorded sale quantities on incomplete days are shown separately.</span></div>
 <div class="dashboard-grid sales-forms">
   <section class="panel form-panel"><div class="panel-heading"><div><h2>Record a sale</h2><p>Sales reduce current stock and create a linked stock movement.</p></div></div>
-    <form method="post" action="/sales">{% if sale_error %}<div class="alert">{{ sale_error }}</div>{% endif %}<div class="form-stack">
+    <form method="post" action="/sales">{% if sale_error %}<div class="alert">{{ sale_error }}</div>{% endif %}<input type="hidden" name="idempotency_key" value="{{ form_values.get('idempotency_key', '') }}"><div class="form-stack">
       <label>Product<select name="product_id" required>{% for p in products %}<option value="{{ p.id }}" {% if (form_values.get('product_id') and form_values.get('product_id')|int == p.id) or (not form_values.get('product_id') and selected_product and selected_product.id == p.id) %}selected{% endif %}>{{ p.name }} · {{ p.sku }} · {{ p.stock_quantity }} in stock</option>{% endfor %}</select></label>
       <label>Quantity sold<input name="quantity_sold" type="number" min="1" step="1" required value="{{ form_values.get('quantity_sold', '') }}" placeholder="Enter units sold"></label>
       <label>Sale date<input name="sale_date" type="date" required value="{{ form_values.get('sale_date', end_date.isoformat()) }}"></label>

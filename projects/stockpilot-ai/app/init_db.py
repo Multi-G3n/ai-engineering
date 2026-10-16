@@ -1,10 +1,12 @@
-from app.database import Base, engine
-from app import models  # noqa: F401 - register mapped tables
+from alembic import command
+from alembic.config import Config
+from pathlib import Path
 
 
 def main():
-    Base.metadata.create_all(bind=engine)
-    print("StockPilot database initialized.")
+    config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    command.upgrade(config, "head")
+    print("StockPilot database upgraded to the latest version.")
 
 
 if __name__ == "__main__":

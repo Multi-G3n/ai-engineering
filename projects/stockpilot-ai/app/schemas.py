@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -48,6 +49,7 @@ class AdjustmentInput(BaseModel):
 
 
 class SaleInput(BaseModel):
+    idempotency_key: UUID
     product_id: int = Field(gt=0)
     quantity_sold: int = Field(gt=0)
     sale_date: date

@@ -27,6 +27,17 @@ class InsufficientStockError(ValueError):
     pass
 
 
+class DuplicateSaleError(ValueError):
+    pass
+
+
+class DemandRangeError(ValueError):
+    pass
+
+
+MAX_DAILY_DEMAND_RANGE_DAYS = 3660
+
+
 @dataclass(frozen=True)
 class DailyDemandPoint:
     sale_date: date
@@ -116,6 +127,9 @@ def _mark_tracking_complete(db: Session, product_id: int, tracked_date: date) ->
 def record_sale(db: Session, data: SaleInput) -> SalesRecord:
     """Commit sale, stock decrease, movement, and optional coverage assertion atomically."""
     try:
+        key = str(data.idempotency_key)
+        if db.scalar(select(SalesRecord.id).where(SalesRecord.idempotency_key == key)) is not None:
+            raise DuplicateSaleError("This sale form was already submitted. Refresh the page to record another sale.")
         product = db.get(Product, data.product_id)
         if product is None:
             raise ProductNotFoundError("Select an existing product.")
@@ -137,6 +151,7 @@ def record_sale(db: Session, data: SaleInput) -> SalesRecord:
             sale_date=data.sale_date,
             quantity_sold=data.quantity_sold,
             unit_selling_price=price,
+            idempotency_key=key,
         )
         db.add(sale)
         db.flush()
@@ -144,12 +159,18 @@ def record_sale(db: Session, data: SaleInput) -> SalesRecord:
             product_id=data.product_id,
             quantity=-data.quantity_sold,
             reason=f"Sale recorded (sales record #{sale.id})",
+            sales_record_id=sale.id,
         ))
         if data.mark_day_complete:
             _mark_tracking_complete(db, data.product_id, data.sale_date)
         db.commit()
         db.refresh(sale)
         return sale
+    except IntegrityError as exc:
+        db.rollback()
+        if db.scalar(select(SalesRecord.id).where(SalesRecord.idempotency_key == str(data.idempotency_key))) is not None:
+            raise DuplicateSaleError("This sale form was already submitted. Refresh the page to record another sale.") from exc
+        raise
     except Exception:
         db.rollback()
         raise
@@ -173,6 +194,8 @@ def daily_demand_summary(
     """Return every date in range; untracked days have no demand value, not zero."""
     if end_date < start_date:
         raise ValueError("End date must be on or after start date.")
+    if (end_date - start_date).days + 1 > MAX_DAILY_DEMAND_RANGE_DAYS:
+        raise DemandRangeError(f"Choose a date range of {MAX_DAILY_DEMAND_RANGE_DAYS} days or fewer.")
     totals = dict(db.execute(
         select(SalesRecord.sale_date, func.sum(SalesRecord.quantity_sold))
         .where(
