@@ -27,6 +27,7 @@ from app.services import (
     adjust_stock,
     create_product,
     daily_demand_summary,
+    simple_demand_forecast,
     dashboard_stats,
     mark_sales_day_complete,
     record_sale,
@@ -183,6 +184,7 @@ def sales_context(request: Request, db: Session, product_id: int | None, start_d
     summary = []
     range_error = None
     recent_sales = []
+    forecast = None
     if end_date < start_date:
         range_error = "End date must be on or after start date."
     elif selected_product is not None:
@@ -190,6 +192,7 @@ def sales_context(request: Request, db: Session, product_id: int | None, start_d
             summary = daily_demand_summary(db, selected_product.id, start_date, end_date)
         except DemandRangeError as exc:
             range_error = str(exc)
+        forecast = simple_demand_forecast(db, selected_product.id)
         recent_sales = db.scalars(
             select(SalesRecord)
             .where(SalesRecord.product_id == selected_product.id)
@@ -204,6 +207,7 @@ def sales_context(request: Request, db: Session, product_id: int | None, start_d
         start_date=start_date,
         end_date=end_date,
         summary=summary,
+        forecast=forecast,
         recent_sales=recent_sales,
         sale_error=sale_error,
         tracking_error=tracking_error,

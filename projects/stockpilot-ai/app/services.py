@@ -222,3 +222,39 @@ def daily_demand_summary(
         ))
         day += timedelta(days=1)
     return points
+
+
+@dataclass(frozen=True)
+class DemandForecast:
+    """A transparent baseline estimate from fully tracked daily demand."""
+
+    daily_average: Decimal
+    weekly_estimate: Decimal
+    tracked_days: int
+    lookback_days: int
+
+
+def simple_demand_forecast(
+    db: Session, product_id: int, as_of: date | None = None
+) -> DemandForecast | None:
+    """Estimate the next week's demand from tracked days in the previous 28 days.
+
+    Requires at least seven fully tracked days. Incomplete dates are excluded,
+    rather than being treated as days with zero demand.
+    """
+    today = as_of or date.today()
+    lookback_days = 28
+    history = daily_demand_summary(
+        db, product_id, today - timedelta(days=lookback_days), today - timedelta(days=1)
+    )
+    observed = [point.demand_quantity for point in history if point.demand_quantity is not None]
+    if len(observed) < 7:
+        return None
+
+    daily_average = Decimal(sum(observed)) / Decimal(len(observed))
+    return DemandForecast(
+        daily_average=daily_average,
+        weekly_estimate=daily_average * Decimal(7),
+        tracked_days=len(observed),
+        lookback_days=lookback_days,
+    )
