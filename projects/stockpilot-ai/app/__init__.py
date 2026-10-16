@@ -1,0 +1,1 @@
+"""StockPilot AI application package."""
