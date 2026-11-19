@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.forecasting import build_forecast_report
 from app.database import get_db
 from app.models import InventoryMovement, Product, SalesRecord
 from app.config import session_cookie_secure, session_secret_key
@@ -340,6 +341,23 @@ def require_ai_csrf(
 # ============================================================
 # STOCKPILOT AI — INVENTORY ASSISTANT
 # ============================================================
+
+@app.get(
+    "/forecast",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_authenticated_user)],
+)
+def forecast_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    report = build_forecast_report(db)
+
+    return render(
+        request,
+        "forecast.html",
+        report=report,
+    )
 
 @app.get(
     "/ai",

@@ -1,0 +1,196 @@
+
+{% extends "base.html" %}
+
+{% block title %}Smart Forecasting · StockPilot{% endblock %}
+{% block crumb %}Smart Forecasting{% endblock %}
+
+{% block content %}
+
+<div class="page-heading">
+  <div>
+    <div class="eyebrow">INVENTORY INTELLIGENCE</div>
+    <h1>Smart Demand Forecasting</h1>
+    <p>
+      Forecast product demand and identify restocking priorities
+      using confirmed sales history.
+    </p>
+  </div>
+
+  <a class="button secondary" href="/sales">
+    Manage sales data
+  </a>
+</div>
+
+<div class="forecast-summary">
+
+  <article class="forecast-stat">
+    <span>Products analyzed</span>
+    <strong>{{ report.total_products }}</strong>
+    <small>Inventory catalogue</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>High-risk products</span>
+    <strong>{{ report.high_risk_count }}</strong>
+    <small>At risk within supplier lead time</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Suggested reorder</span>
+    <strong>{{ report.recommended_units }}</strong>
+    <small>Units with sufficient forecast data</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Insufficient data</span>
+    <strong>{{ report.insufficient_data_count }}</strong>
+    <small>Products needing more tracked sales</small>
+  </article>
+
+</div>
+
+<section class="panel forecast-table-panel">
+
+  <div class="panel-heading">
+    <div>
+      <h2>Product demand forecasts</h2>
+      <p>
+        Based on completed sales days within the previous
+        28 days.
+      </p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+
+    <table class="forecast-table">
+      <thead>
+        <tr>
+          <th>PRODUCT</th>
+          <th>CURRENT STOCK</th>
+          <th>7-DAY DEMAND</th>
+          <th>30-DAY DEMAND</th>
+          <th>DAYS OF STOCK</th>
+          <th>REORDER</th>
+          <th>RISK</th>
+        </tr>
+      </thead>
+
+      <tbody>
+
+        {% for item in report.products %}
+
+        <tr>
+          <td>
+            <strong>{{ item.name }}</strong>
+            <small class="forecast-sku">{{ item.sku }}</small>
+          </td>
+
+          <td>{{ item.current_stock }}</td>
+
+          <td>
+            {% if item.demand_7_days is not none %}
+              {{ item.demand_7_days }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+
+          <td>
+            {% if item.demand_30_days is not none %}
+              {{ item.demand_30_days }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+
+          <td>
+            {% if item.days_of_stock is not none %}
+              {{ "%.1f"|format(item.days_of_stock) }} days
+            {% elif item.daily_demand is not none %}
+              No observed demand
+            {% else %}
+              —
+            {% endif %}
+          </td>
+
+          <td>
+            {% if item.reorder_quantity is not none %}
+              <strong>{{ item.reorder_quantity }} units</strong>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+
+          <td>
+            <span class="forecast-risk
+              {% if item.risk == 'Out of stock' or item.risk == 'High risk' %}
+                risk-high
+              {% elif item.risk == 'Low stock' %}
+                risk-medium
+              {% elif item.risk == 'Healthy' %}
+                risk-good
+              {% else %}
+                risk-unknown
+              {% endif %}
+            ">
+              {{ item.risk }}
+            </span>
+          </td>
+        </tr>
+
+        {% else %}
+
+        <tr>
+          <td colspan="7" class="empty">
+            No products found. Add products to begin forecasting.
+          </td>
+        </tr>
+
+        {% endfor %}
+
+      </tbody>
+    </table>
+
+  </div>
+</section>
+
+<section class="panel forecast-explanation">
+
+  <h2>How recommendations are calculated</h2>
+
+  <p>
+    Forecasts use average daily demand from at least
+    seven fully tracked days within the previous 28 days.
+    Untracked days are excluded.
+  </p>
+
+  <p>
+    The current planning assumptions are
+    <strong>{{ report.lead_time_days }} days</strong>
+    of supplier lead time and
+    <strong>{{ report.safety_stock_days }} days</strong>
+    of safety stock.
+  </p>
+
+  <p>
+    Suggested reorder quantity is the amount needed to
+    reach the larger of the product minimum stock level
+    or estimated demand across the planning period.
+  </p>
+
+  <p>
+    Forecasts are simple averages, not machine-learning
+    predictions. They do not account for seasonality,
+    stockouts, pending orders, or supplier-specific lead times.
+    Products without sufficient data have no numerical forecast.
+  </p>
+
+  <p>
+    <strong>Report date:</strong>
+    {{ report.as_of.strftime("%d %b %Y") }}
+  </p>
+
+</section>
+
+{% endblock %}

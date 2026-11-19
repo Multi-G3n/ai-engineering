@@ -16,6 +16,7 @@
 
     <!-- AI Assistant styles -->
     <link rel="stylesheet" href="/static/ai-assistant.css">
+    <link rel="stylesheet" href="/static/forecast.css">
 </head>
 
 <body>
@@ -67,6 +68,13 @@
             </a>
 
             <!-- NEW AI ASSISTANT -->
+            <a
+                class="{% if request.url.path == '/forecast' %}active{% endif %}"
+                href="/forecast"
+            >
+                ✦ <span>Smart Forecasting</span>
+            </a>
+
             <a
                 class="{% if request.url.path == '/ai' %}active{% endif %}"
                 href="/ai"
