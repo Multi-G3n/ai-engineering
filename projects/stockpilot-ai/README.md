@@ -1,6 +1,85 @@
-# StockPilot AI — Milestone 1
+# StockPilot AI
 
-A small inventory management web application built with FastAPI, SQLAlchemy, SQLite, and Jinja2. The first milestone provides products, stock movement history, low-stock tracking, and a database-backed dashboard. There are no AI features in this milestone.
+### AI-Powered Inventory Management & Smart Demand Forecasting
+
+StockPilot AI is a Python-based inventory management application that integrates **Google Gemini** to provide intelligent inventory analysis and natural-language recommendations.
+
+The project demonstrates how a generative AI model can be integrated into a database-backed business application while keeping quantitative calculations deterministic and verifiable.
+
+## Core Capabilities
+
+**1. Gemini AI Inventory Assistant**
+
+Users can ask questions about inventory levels, products requiring attention and restocking priorities. The application constructs a structured inventory snapshot and provides it to the Gemini API for natural-language analysis.
+
+**2. Smart Demand Forecasting**
+
+The forecasting module calculates average daily demand from explicitly tracked sales days within a 28-day lookback window. At least seven complete tracking days are required before producing a forecast.
+
+**3. Restocking Recommendations**
+
+The application calculates estimated demand, stock coverage and suggested reorder quantities using configurable lead-time and safety-stock assumptions.
+
+**4. Inventory and Sales Management**
+
+Users can manage products, record sales, track stock movements and review historical sales data.
+
+**5. Authentication and Automated Testing**
+
+The application includes administrator authentication, CSRF protection, database migrations and automated tests.
+
+## Technical Architecture
+
+```text
+User / Web Interface
+        |
+        v
+FastAPI Application
+        |
+        +---- Inventory & Sales Services
+        |           |
+        |           v
+        |     SQLAlchemy / SQLite
+        |
+        +---- Demand Forecasting
+        |           |
+        |           v
+        |     Python Calculations
+        |
+        +---- AI Inventory Assistant
+                    |
+                    v
+             Inventory Snapshot
+                    |
+                    v
+             Google Gemini API
+                    |
+                    v
+           Natural-Language Answer
+```
+
+## Verification
+
+Latest local test result:
+
+**58 passed, 1 warning**
+
+The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
+
+## Application Screenshots
+
+### Inventory Dashboard
+![StockPilot AI Dashboard](docs/screenshots/dashboard.png)
+
+### Gemini AI Assistant
+![Gemini Inventory Assistant](docs/screenshots/ai-assistant.png)
+
+### Smart Demand Forecasting
+![Demand Forecasting Dashboard](docs/screenshots/forecast.png)
+
+## Installation, Configuration and Technical Documentation
+
+The sections below document the project's setup, database migrations, security controls and implementation history.
 
 ## Requirements
 
