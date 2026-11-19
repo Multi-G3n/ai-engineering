@@ -4,7 +4,15 @@ import secrets
 from uuid import uuid4
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
+
+from app.ai_service import (
+    AIServiceError,
+    ask_inventory_assistant,
+    build_inventory_snapshot,
+)
+from fastapi import Depends, FastAPI, Form, Request, Header
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -304,3 +312,86 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
+
+
+def require_ai_csrf(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+):
+    """Validate CSRF for JSON-based AI requests."""
+
+    expected_token = request.session.get("csrf_token")
+
+    if (
+        not expected_token
+        or not x_csrf_token
+        or not secrets.compare_digest(
+            expected_token,
+            x_csrf_token,
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid CSRF token.",
+        )
+
+
+
+# ============================================================
+# STOCKPILOT AI — INVENTORY ASSISTANT
+# ============================================================
+
+@app.get(
+    "/ai",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_authenticated_user)],
+)
+def ai_assistant_page(request: Request):
+    return render(request,"ai_assistant.html")
+
+class AIChatRequest(BaseModel):
+    question: str = Field(
+        min_length=3,
+        max_length=500,
+    )
+
+
+@app.post(
+    "/ai/chat",
+    dependencies=[
+        Depends(require_authenticated_user),
+        Depends(require_ai_csrf),
+    ],
+)
+def ai_chat(
+    payload: AIChatRequest,
+    db: Session = Depends(get_db),
+):
+    question = payload.question.strip()
+
+    if len(question) < 3:
+        raise HTTPException(
+            status_code=422,
+            detail="Question is too short.",
+        )
+
+    snapshot = build_inventory_snapshot(db)
+
+    try:
+        answer = ask_inventory_assistant(
+            question=question,
+            snapshot=snapshot,
+        )
+    except AIServiceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "answer": answer,
+        "source": "StockPilot inventory database",
+        "snapshot_date": snapshot["as_of"],
+        "products_analyzed": snapshot["product_count"],
+        "snapshot_truncated": snapshot["truncated"],
+    }

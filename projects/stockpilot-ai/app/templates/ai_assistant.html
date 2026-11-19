@@ -1,0 +1,229 @@
+
+{% extends "base.html" %}
+
+{% block title %}
+AI Assistant · StockPilot
+{% endblock %}
+
+{% block crumb %}
+AI Assistant
+{% endblock %}
+
+{% block content %}
+
+<!-- PAGE HEADER -->
+<div class="page-heading">
+
+    <div>
+        <div class="eyebrow">
+            GEMINI-POWERED INVENTORY INTELLIGENCE
+        </div>
+
+        <h1>AI Inventory Assistant</h1>
+
+        <p>
+            Analyze inventory, identify low-stock products,
+            and explore restocking priorities using AI.
+        </p>
+    </div>
+
+</div>
+
+
+<div class="ai-layout">
+
+    <!-- MAIN CHAT PANEL -->
+    <section class="ai-chat-panel">
+
+        <!-- CHAT HEADER -->
+        <div class="ai-chat-header">
+
+            <div class="ai-avatar">
+                ✦
+            </div>
+
+            <div class="ai-chat-title">
+                <h2>StockPilot AI</h2>
+                <p>Powered by Google Gemini</p>
+            </div>
+
+            <span class="ai-status">
+                Ready
+            </span>
+
+        </div>
+
+
+        <!-- CHAT MESSAGES -->
+        <div
+            class="ai-messages"
+            id="aiMessages"
+            aria-live="polite"
+        >
+
+            <div class="ai-message assistant">
+
+                <div class="ai-message-avatar">
+                    ✦
+                </div>
+
+                <div class="ai-bubble">
+
+                    <strong>
+                        Welcome to StockPilot AI!
+                    </strong>
+
+                    <p>
+                        I can help you understand your inventory,
+                        identify low-stock products, and review
+                        available demand forecasts.
+                    </p>
+
+                    <p>
+                        What would you like to know?
+                    </p>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- CHAT INPUT -->
+        <div class="ai-composer">
+
+            <form id="aiChatForm">
+
+                <label
+                    for="aiQuestion"
+                    class="ai-input-label"
+                >
+                    Ask your inventory assistant
+                </label>
+
+                <textarea
+                    id="aiQuestion"
+                    name="question"
+                    placeholder="Example: Which products should I restock first?"
+                    minlength="3"
+                    maxlength="500"
+                    rows="3"
+                    required
+                ></textarea>
+
+                <div class="ai-composer-bottom">
+
+                    <small>
+                        Responses are AI-generated using available inventory data.
+                    </small>
+
+                    <button
+                        type="submit"
+                        id="aiSendButton"
+                        class="button primary"
+                    >
+                        Ask AI →
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </section>
+
+
+    <!-- RIGHT SIDEBAR -->
+    <aside class="ai-side-panel">
+
+        <!-- SUGGESTED QUESTIONS -->
+        <section class="panel ai-suggestions">
+
+            <h2>Suggested questions</h2>
+
+            <p>
+                Select a question to start analyzing.
+            </p>
+
+            <button
+                type="button"
+                class="ai-prompt"
+                data-question="Which products are currently low on stock?"
+            >
+                Which products are low on stock?
+            </button>
+
+            <button
+                type="button"
+                class="ai-prompt"
+                data-question="Which products should I prioritize for restocking?"
+            >
+                What should I restock first?
+            </button>
+
+            <button
+                type="button"
+                class="ai-prompt"
+                data-question="Which products have available weekly demand estimates?"
+            >
+                Show demand estimates
+            </button>
+
+            <button
+                type="button"
+                class="ai-prompt"
+                data-question="Summarize my current inventory situation."
+            >
+                Summarize my inventory
+            </button>
+
+        </section>
+
+
+        <!-- INFORMATION PANEL -->
+        <section class="panel ai-info">
+
+            <h2>How it works</h2>
+
+            <p>
+                StockPilot AI reads a snapshot of your
+                inventory database.
+            </p>
+
+            <p>
+                It uses Google Gemini to generate
+                inventory insights and recommendations.
+            </p>
+
+            <p>
+                The assistant cannot directly modify
+                inventory records.
+            </p>
+
+            <p>
+                Each analysis includes up to 50 products.
+                Incomplete snapshots are identified.
+            </p>
+
+        </section>
+
+    </aside>
+
+</div>
+
+
+<!-- CSRF TOKEN FOR SECURE JSON REQUESTS -->
+<script
+    id="aiCsrfToken"
+    type="application/json"
+>{{ csrf_token | tojson }}</script>
+
+<!-- AI ASSISTANT JAVASCRIPT -->
+<script
+    src="/static/ai-assistant.js"
+    defer
+></script>
+
+{% endblock %}
