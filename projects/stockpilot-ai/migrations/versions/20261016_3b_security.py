@@ -14,8 +14,7 @@ depends_on = None
 
 
 def upgrade():
-    # The preceding revision calls current metadata.create_all(), which may already
-    # create this additive table when upgrading a database from before Milestone 2B.
+    # Older copies of 2b could create users early. Preserve those existing accounts.
     if "users" not in inspect(op.get_bind()).get_table_names():
         op.create_table(
             "users",

@@ -6,6 +6,7 @@ Revises: None
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
+from migrations.schema_20261016 import metadata
 
 revision = "20261016_2b"
 down_revision = None
@@ -15,10 +16,10 @@ depends_on = None
 
 def upgrade():
     bind = op.get_bind()
-    # create_all creates only absent tables; it never replaces existing business tables.
-    from app.database import Base
-    from app import models  # noqa: F401
-    Base.metadata.create_all(bind=bind, checkfirst=True)
+    # Historical repair: freeze the original business tables, never today's models.
+    # Users remain owned by 3b; already-existing users are left untouched.
+    for table in metadata().sorted_tables:
+        table.create(bind=bind, checkfirst=True)
     inspector = inspect(bind)
     movement_columns = {column["name"] for column in inspector.get_columns("inventory_movements")}
     if "sales_record_id" not in movement_columns:

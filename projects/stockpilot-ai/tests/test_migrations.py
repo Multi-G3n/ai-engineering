@@ -55,7 +55,7 @@ def test_migration_preserves_legacy_inventory_rows_and_unmatched_history(tmp_pat
         assert connection.execute(text("SELECT COUNT(*) FROM inventory_movements")).scalar_one() == 4
         assert connection.execute(text("SELECT sales_record_id FROM inventory_movements WHERE id=2")).scalar_one() == 77
         assert connection.execute(text("SELECT sales_record_id FROM inventory_movements WHERE id IN (3,4) ORDER BY id")).all() == [(None,), (None,)]
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261016_3b"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "20261126_53"
     inspector = inspect(engine)
     assert {"sales_records", "sales_tracking_days", "users"}.issubset(inspector.get_table_names())
     assert inspector.get_indexes("users") == [{"name": "ix_users_username", "column_names": ["username"],

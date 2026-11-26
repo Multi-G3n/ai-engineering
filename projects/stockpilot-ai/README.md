@@ -60,7 +60,7 @@ FastAPI Application
 
 ## Verification
 
-Latest Phase 5.2 verification: **158 passed, 1 warning** (130 baseline cases plus 28 forecasting/reporting reliability cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
+Latest Phase 5.3 verification: **177 passed, 1 warning** (158 baseline cases plus 19 migration reliability cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
 
 The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
 
@@ -231,6 +231,8 @@ Run the full test suite, including sales transaction, data coverage, persistence
 
 ## Milestone 2B: Integrity and migrations
 
+Phase 5.3 extends this workflow with the corrective revision described below. Fresh installations and supported legacy databases now converge on the same schema; existing upgrades require a verified backup and an application maintenance window.
+
 The schema is versioned with Alembic. Application startup does not migrate the database. Before upgrading an existing business database, stop the application and create a verified SQLite backup:
 
 ```powershell
@@ -271,6 +273,65 @@ Phase 5.1 resolves relative SQLite paths from the project directory for every en
 ```
 
 This is a write operation: back up and verify the selected database first. Alembic configuration wiring uses the shared resolver; migration revisions and schemas are unchanged by Phase 5.1.
+
+## Phase 5.3: database migration reliability
+
+### Revision chain and compatibility strategy
+
+The single revision chain is `base -> 20261016_2b -> 20261016_3b -> 20261126_53`.
+
+The original `2b` imported the current ORM models and called `Base.metadata.create_all()`. As models evolved, replaying that revision could create future tables (including `users` ahead of `3b`), while leaving missing constraints and indexes unchanged on legacy tables. It also created redundant unique indexes when equivalent unique constraints already existed. SQLite legacy primary-key nullability and missing checks/indexes could therefore differ from fresh installations at the same revision.
+
+The limited historical repair replaces only the model-dependent table bootstrap with a frozen SQLAlchemy schema in `migrations/schema_20261016.py`. The revision IDs and ordering remain unchanged. `2b` owns the four inventory/sales tables; `3b` owns users and still tolerates a users table created early by the original `2b`. Existing applied revisions are not replayed or re-stamped. The original historical sales-link matching remains in `2b`.
+
+A forward-only revision alone cannot fix replay: the old bootstrap would still execute evolving models, potentially failing or creating future schema before the corrective revision is reached. The frozen bootstrap prevents that dependency; the new forward revision `20261126_53` repairs databases that already ran the old code. Do not edit this frozen schema for future features.
+
+The corrective revision validates known columns/types/defaults/keys and existing records, then uses Alembic batch copies to normalize the five business tables. It restores expected nullability, check constraints, foreign keys, uniqueness and indexes, and removes the two redundant `2b` unique indexes. It preserves IDs, prices, stock, timestamps, nullable historical tokens/linkage, sales coverage and account hashes/flags. No new business fields or business rules are introduced.
+
+Supported inputs are a fresh file; the original unversioned product/movement schema; its sales-history extension; and existing `2b`/`3b` layouts produced by this application. Unknown custom columns, indexes, constraints, views/triggers, incompatible types/defaults or invalid/orphaned/duplicate records cause an error and rollback rather than automatic data correction. Unrelated tables are not rebuilt. A custom database requires separate review; do not delete data or use `alembic stamp head` to bypass validation.
+
+### Responsibilities and fresh installation
+
+- Web startup opens sessions on demand; it does not create tables, migrate, seed, reset, or create accounts.
+- `app.init_db` explicitly runs Alembic to head. Repeating it at head is safe and does not repeat table rebuilds.
+- Alembic owns production schema creation. `Base.metadata.create_all()` appears in tests only as an isolated schema reference, never as the documented installation path.
+- `app.create_admin` creates an account after initialization; it does not migrate or create tables.
+- `app.seed` explicitly upgrades and adds development products only if the catalog is empty. It is optional and never runs on web startup.
+
+Configure the project as described above, using the repository-root environment. For a **new installation**, select the intended database (prefer an explicit absolute `DATABASE_URL`) and run from the project directory:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m app.init_db
+..\..\.venv\Scripts\python.exe -m app.create_admin
+..\..\.venv\Scripts\python.exe -m alembic current
+```
+
+The current revision should be `20261126_53`. An existing installation must follow the backup/upgrade sequence instead of treating its database as new. Never overwrite an existing `.env` or database to initialize the application.
+
+### Existing installation upgrade
+
+1. Stop the application and all database writers. Confirm the selected database via the shared configuration and an explicit absolute `DATABASE_URL` if necessary.
+2. Run `..\..\.venv\Scripts\python.exe -m app.backup_db`. Verify its printed source/destination paths, retain the independent backup on protected storage, and keep the original database.
+3. Run `..\..\.venv\Scripts\python.exe -m app.init_db` (equivalent to `..\..\.venv\Scripts\python.exe -m alembic upgrade head`).
+4. Run `..\..\.venv\Scripts\python.exe -m alembic current` and `..\..\.venv\Scripts\python.exe -m alembic check`. Verify the revision, schema expectations and representative records before restarting writers.
+
+SQLite upgrades acquire a write reservation with `BEGIN IMMEDIATE`. Foreign-key enforcement is disabled only on the dedicated migration connection, outside its transaction, to prevent cascading record deletion during referenced-table rebuilds. All DDL, copies and Alembic revision updates run in one explicit transaction. A final `PRAGMA foreign_key_check` must pass before commit; errors roll back the whole invocation, and enforcement is restored before closing the connection. Application connections continue to enforce foreign keys normally. The migration does not call a reset or delete the database on error.
+
+### Backup and recovery
+
+The existing backup utility uses SQLite's backup API rather than copying a live main file. Tests verify committed records, WAL-mode operation, exclusion of uncommitted records, integrity checks, filename-collision protection and independent opening. The backup includes the Alembic revision table. A backup is a consistent point-in-time copy, not a synchronization mechanism for later transactions.
+
+If an upgrade fails, leave writers stopped, retain the original file and inspect the error. A validated retry after correcting the code or obtaining an approved data repair does not require dropping tables or stamping a revision. Do not assume a successful upgrade message after a failed command.
+
+For recovery, retain the newer database and any WAL/SHM companions first. Copy a verified backup to a **separate, previously unused recovery filename**; never restore over the only copy of newer business activity. Open the recovery file independently, run SQLite `PRAGMA integrity_check` (expect `ok`) and `PRAGMA foreign_key_check` (expect no rows), and inspect representative records and `alembic_version`. Rehearse any required upgrade on that separate copy. Only after verification should an operator point `DATABASE_URL` to the recovery file and restart the application. Restoring an older backup excludes all activity after that backup; reconcile newer records separately. No restoration against the real database is performed by tests or this milestone.
+
+### Schema verification, development conventions and limitations
+
+Tests compare fresh Alembic initialization, supported legacy upgrades, original applied-head layouts and the documented initialization command against a separate model-created reference. They compare all business tables, column order/types/nullability/server defaults, primary/foreign keys and delete actions, unique/check constraints and indexes. Fresh upgraded schema also passes Alembic's autogeneration check. The only intentional structural difference from the model-created reference is Alembic's own `alembic_version` table. ORM Python-side defaults are not SQL server defaults; migration definitions deliberately preserve that distinction.
+
+For future work, create a new explicit Alembic revision, review generated operations, and test both fresh replay and upgrades with populated prior layouts. Do not import current app models or call current `Base.metadata.create_all()` from a revision. Preserve the historical snapshot and applied revision IDs. Test invalid inputs, mid-copy failure rollback, preserved accounts/relationships and repeat upgrades. Add new head expectations to tests when the chain advances.
+
+This normalization is supported and tested for online SQLite execution only. Full offline SQL generation and other database dialects are not supported for this inspection-based correction. Batch copies require a maintenance window and enough free disk space for replacement tables. Custom schema or invalid records need review rather than an automatic reset. Downgrades remain disabled; recovery uses a verified backup. Automated tests do not inspect or migrate the actual business database. The sole change to the existing 158 test cases is updating the migration test's expected head from `20261016_3b` to `20261126_53`; its data-preservation assertions remain unchanged.
 
 ## Milestone 3B: Authentication and form security
 

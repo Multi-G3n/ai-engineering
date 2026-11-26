@@ -1,3 +1,5 @@
+"""Explicit Alembic upgrade command; never seeds, resets, or creates accounts."""
+
 from alembic import command
 from alembic.config import Config
 from pathlib import Path
