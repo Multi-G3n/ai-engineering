@@ -7,11 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.ai_provider import AIServiceError, generate_inventory_answer
 from app.models import Product
-from app.services import simple_demand_forecast
 from app.forecasting import (
     DEFAULT_LEAD_TIME_DAYS,
     DEFAULT_SAFETY_STOCK_DAYS,
-    calculate_recommendation,
+    product_recommendation,
+    summarize_recommendations,
 )
 
 
@@ -26,7 +26,7 @@ MAX_PRODUCTS = 50
 # INVENTORY SNAPSHOT
 # ============================================================
 
-def build_inventory_snapshot(db: Session) -> dict:
+def build_inventory_snapshot(db: Session, as_of: date | None = None) -> dict:
     """
     Build a read-only inventory snapshot.
 
@@ -42,7 +42,7 @@ def build_inventory_snapshot(db: Session) -> dict:
     Gemini receives the results for explanation.
     """
 
-    today = date.today()
+    today = as_of or date.today()
 
     products = db.scalars(
         select(Product)
@@ -52,32 +52,17 @@ def build_inventory_snapshot(db: Session) -> dict:
 
     truncated = len(products) > MAX_PRODUCTS
     inventory = []
+    recommendations = []
 
     for product in products[:MAX_PRODUCTS]:
 
-        # Calculate demand from tracked sales history.
-        forecast = simple_demand_forecast(
-            db,
-            product.id,
-            as_of=today,
-        )
-
         # Generate deterministic restock recommendations.
-        recommendation = calculate_recommendation(
-            product=product,
-            daily_demand=(
-                forecast.daily_average
-                if forecast is not None
-                else None
-            ),
-            tracked_days=(
-                forecast.tracked_days
-                if forecast is not None
-                else 0
-            ),
+        recommendation = product_recommendation(
+            db, product, today,
             lead_time_days=DEFAULT_LEAD_TIME_DAYS,
             safety_stock_days=DEFAULT_SAFETY_STOCK_DAYS,
         )
+        recommendations.append(recommendation)
 
         inventory.append({
 
@@ -96,12 +81,15 @@ def build_inventory_snapshot(db: Session) -> dict:
             "stock_quantity": product.stock_quantity,
             "minimum_stock": product.minimum_stock,
             "is_low_stock": product.is_low_stock,
+            "physical_inventory_status": recommendation.physical_inventory_status,
 
             # --------------------------------------------
             # FORECAST AVAILABILITY
             # --------------------------------------------
 
-            "forecast_available": forecast is not None,
+            "forecast_available": recommendation.forecast_available,
+            "forecast_availability": recommendation.forecast_availability,
+            "forecast_risk": recommendation.forecast_risk,
             "tracked_days": recommendation.tracked_days,
 
             # --------------------------------------------
@@ -119,10 +107,10 @@ def build_inventory_snapshot(db: Session) -> dict:
 
             "weekly_demand_estimate": (
                 round(
-                    float(forecast.weekly_estimate),
+                    float(recommendation.daily_demand * 7),
                     2,
                 )
-                if forecast is not None
+                if recommendation.daily_demand is not None
                 else None
             ),
 
@@ -163,19 +151,6 @@ def build_inventory_snapshot(db: Session) -> dict:
         for item in inventory
     )
 
-    high_risk_count = sum(
-        item["stockout_risk"] in (
-            "Out of stock",
-            "High risk",
-        )
-        for item in inventory
-    )
-
-    insufficient_data_count = sum(
-        not item["forecast_available"]
-        for item in inventory
-    )
-
     recommended_reorder_units = sum(
         item["reorder_quantity"] or 0
         for item in inventory
@@ -199,8 +174,7 @@ def build_inventory_snapshot(db: Session) -> dict:
 
         # Inventory intelligence summary
         "low_stock_count": low_stock_count,
-        "high_risk_count": high_risk_count,
-        "insufficient_data_count": insufficient_data_count,
+        **summarize_recommendations(recommendations),
         "recommended_reorder_units": (
             recommended_reorder_units
         ),
@@ -272,7 +246,15 @@ You must follow these rules:
   demand-based reorder recommendation is unavailable.
 
 5. STOCKOUT RISK
-- Use the provided stockout_risk classification.
+- Use physical_inventory_status for current Out of stock, Low stock, or In stock status.
+- Always identify physical shortages even when forecast_available is false.
+- Use forecast_availability and tracked_days to explain whether history is sufficient.
+- Use forecast_risk only for demand-based risk; null means unavailable, not low risk.
+- No observed demand means confirmed zero sales on completed days, not unknown history.
+- stockout_risk is a legacy combined label; prefer the separate status fields.
+- Current shortages and predicted shortages are separate; do not add overlapping counts.
+- Physical status counts are exclusive. Forecast availability counts are independent.
+- attention_count counts each product once, even when it is low stock and high risk.
 - Explain days_of_stock when available.
 - Do not describe missing forecasts as evidence of low risk.
 - A product may be below minimum stock even when its

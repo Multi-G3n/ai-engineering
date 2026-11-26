@@ -30,9 +30,9 @@
   </article>
 
   <article class="forecast-stat">
-    <span>High-risk products</span>
-    <strong>{{ report.high_risk_count }}</strong>
-    <small>At risk within supplier lead time</small>
+    <span>Out of stock now</span>
+    <strong>{{ report.out_of_stock_count }}</strong>
+    <small>Zero units, regardless of sales history</small>
   </article>
 
   <article class="forecast-stat">
@@ -45,6 +45,30 @@
     <span>Insufficient data</span>
     <strong>{{ report.insufficient_data_count }}</strong>
     <small>Products needing more tracked sales</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Low stock now</span>
+    <strong>{{ report.physical_low_stock_count }}</strong>
+    <small>Positive stock at or below minimum</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Predicted shortages</span>
+    <strong>{{ report.predicted_shortage_count }}</strong>
+    <small>Positive stock lasting at most the lead time</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Forecast available</span>
+    <strong>{{ report.forecast_available_count }}</strong>
+    <small>At least 7 completed tracking days</small>
+  </article>
+
+  <article class="forecast-stat">
+    <span>Products needing attention</span>
+    <strong>{{ report.attention_count }}</strong>
+    <small>Current or predicted shortage, counted once</small>
   </article>
 
 </div>
@@ -68,11 +92,14 @@
         <tr>
           <th>PRODUCT</th>
           <th>CURRENT STOCK</th>
+          <th>PHYSICAL STATUS</th>
+          <th>FORECAST AVAILABILITY</th>
+          <th>COMPLETED DAYS</th>
           <th>7-DAY DEMAND</th>
           <th>30-DAY DEMAND</th>
           <th>DAYS OF STOCK</th>
           <th>REORDER</th>
-          <th>RISK</th>
+          <th>FORECAST RISK</th>
         </tr>
       </thead>
 
@@ -87,12 +114,15 @@
           </td>
 
           <td>{{ item.current_stock }}</td>
+          <td><span class="forecast-risk {% if item.physical_inventory_status == 'Out of stock' %}risk-high{% elif item.physical_inventory_status == 'Low stock' %}risk-medium{% else %}risk-good{% endif %}">{{ item.physical_inventory_status }}</span></td>
+          <td><span class="forecast-risk {% if item.forecast_available %}risk-good{% else %}risk-unknown{% endif %}">{{ item.forecast_availability }}</span></td>
+          <td>{{ item.tracked_days }} / 28 <small>(7 required)</small></td>
 
           <td>
             {% if item.demand_7_days is not none %}
               {{ item.demand_7_days }}
             {% else %}
-              —
+              Unavailable
             {% endif %}
           </td>
 
@@ -100,7 +130,7 @@
             {% if item.demand_30_days is not none %}
               {{ item.demand_30_days }}
             {% else %}
-              —
+              Unavailable
             {% endif %}
           </td>
 
@@ -110,7 +140,7 @@
             {% elif item.daily_demand is not none %}
               No observed demand
             {% else %}
-              —
+              Unavailable
             {% endif %}
           </td>
 
@@ -118,23 +148,21 @@
             {% if item.reorder_quantity is not none %}
               <strong>{{ item.reorder_quantity }} units</strong>
             {% else %}
-              —
+              Unavailable
             {% endif %}
           </td>
 
           <td>
             <span class="forecast-risk
-              {% if item.risk == 'Out of stock' or item.risk == 'High risk' %}
+              {% if item.forecast_risk == 'High risk' %}
                 risk-high
-              {% elif item.risk == 'Low stock' %}
-                risk-medium
-              {% elif item.risk == 'Healthy' %}
+              {% elif item.forecast_risk == 'Low risk' %}
                 risk-good
               {% else %}
                 risk-unknown
               {% endif %}
             ">
-              {{ item.risk }}
+              {{ item.forecast_risk if item.forecast_risk is not none else 'Unavailable' }}
             </span>
           </td>
         </tr>
@@ -142,7 +170,7 @@
         {% else %}
 
         <tr>
-          <td colspan="7" class="empty">
+          <td colspan="10" class="empty">
             No products found. Add products to begin forecasting.
           </td>
         </tr>
@@ -162,7 +190,19 @@
   <p>
     Forecasts use average daily demand from at least
     seven fully tracked days within the previous 28 days.
-    Untracked days are excluded.
+    Today is excluded. Confirmed zero-sales days count as zero;
+    untracked days remain unknown and are excluded.
+  </p>
+
+  <p>
+    Physical inventory status is independent of forecast availability.
+    {{ report.in_stock_count }} products are above their minimum stock.
+    Predicted shortages exclude products already out of stock, but may overlap
+    low stock. Products needing attention counts that overlap only once.
+    Availability counts are separate and must not be added to shortage counts.
+    Unavailable demand and reorder values are unknown, not zero.
+    No observed demand describes completed zero-sales days and does not mean
+    a product has physical stock available.
   </p>
 
   <p>

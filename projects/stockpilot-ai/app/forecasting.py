@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Product
-from app.services import simple_demand_forecast
+from app.services import demand_forecast_history
 
 
 DEFAULT_LEAD_TIME_DAYS = 7
@@ -32,6 +32,21 @@ class RestockRecommendation:
     days_of_stock: Decimal | None
     reorder_quantity: int | None
     risk: str
+    forecast_risk: str | None
+
+    @property
+    def physical_inventory_status(self) -> str:
+        if self.current_stock == 0:
+            return "Out of stock"
+        return "Low stock" if self.current_stock <= self.minimum_stock else "In stock"
+
+    @property
+    def forecast_available(self) -> bool:
+        return self.daily_demand is not None
+
+    @property
+    def forecast_availability(self) -> str:
+        return "Available" if self.forecast_available else "Insufficient data"
 
 
 def round_up(value: Decimal) -> int:
@@ -67,7 +82,8 @@ def calculate_recommendation(
             demand_30_days=None,
             days_of_stock=None,
             reorder_quantity=None,
-            risk="Insufficient data",
+            risk="Out of stock" if stock == 0 else "Insufficient data",
+            forecast_risk=None,
         )
 
     daily = Decimal(str(daily_demand))
@@ -80,9 +96,11 @@ def calculate_recommendation(
 
     if daily == 0:
         days_of_stock = None
-        risk = "Low stock" if stock <= minimum else "Healthy"
+        risk = "Out of stock" if stock == 0 else ("Low stock" if stock <= minimum else "Healthy")
+        forecast_risk = "No observed demand"
     else:
         days_of_stock = Decimal(stock) / daily
+        forecast_risk = "High risk" if days_of_stock <= Decimal(lead_time_days) else "Low risk"
 
         if stock == 0:
             risk = "Out of stock"
@@ -115,7 +133,43 @@ def calculate_recommendation(
         days_of_stock=days_of_stock,
         reorder_quantity=reorder_quantity,
         risk=risk,
+        forecast_risk=forecast_risk,
     )
+
+
+def product_recommendation(
+    db: Session, product: Product, as_of: date,
+    lead_time_days: int = DEFAULT_LEAD_TIME_DAYS,
+    safety_stock_days: int = DEFAULT_SAFETY_STOCK_DAYS,
+) -> RestockRecommendation:
+    """Shared report/snapshot path, retaining coverage counts below the threshold."""
+    history = demand_forecast_history(db, product.id, as_of=as_of)
+    return calculate_recommendation(
+        product, history.forecast.daily_average if history.forecast else None,
+        tracked_days=history.tracked_days, lead_time_days=lead_time_days,
+        safety_stock_days=safety_stock_days,
+    )
+
+
+def summarize_recommendations(items: list[RestockRecommendation]) -> dict:
+    """Physical buckets are exclusive; availability is an independent dimension."""
+    out = sum(item.current_stock == 0 for item in items)
+    low = sum(item.physical_inventory_status == "Low stock" for item in items)
+    predicted = sum(item.current_stock > 0 and item.forecast_risk == "High risk" for item in items)
+    return {
+        "out_of_stock_count": out,
+        "physical_low_stock_count": low,
+        "in_stock_count": len(items) - out - low,
+        "current_shortage_count": out + low,
+        "predicted_shortage_count": predicted,
+        "high_risk_count": out + predicted,
+        "attention_count": sum(
+            item.physical_inventory_status != "In stock" or item.forecast_risk == "High risk"
+            for item in items
+        ),
+        "forecast_available_count": sum(item.forecast_available for item in items),
+        "insufficient_data_count": sum(not item.forecast_available for item in items),
+    }
 
 
 def build_forecast_report(
@@ -138,20 +192,8 @@ def build_forecast_report(
     recommendations = []
 
     for product in products:
-        forecast = simple_demand_forecast(
-            db,
-            product.id,
-            as_of=today,
-        )
-
-        recommendation = calculate_recommendation(
-            product=product,
-            daily_demand=(
-                forecast.daily_average if forecast else None
-            ),
-            tracked_days=(
-                forecast.tracked_days if forecast else 0
-            ),
+        recommendation = product_recommendation(
+            db, product, today,
             lead_time_days=lead_time_days,
             safety_stock_days=safety_stock_days,
         )
@@ -179,14 +221,7 @@ def build_forecast_report(
         "safety_stock_days": safety_stock_days,
         "products": recommendations,
         "total_products": len(recommendations),
-        "high_risk_count": sum(
-            item.risk in ("Out of stock", "High risk")
-            for item in recommendations
-        ),
-        "insufficient_data_count": sum(
-            item.risk == "Insufficient data"
-            for item in recommendations
-        ),
+        **summarize_recommendations(recommendations),
         "recommended_units": sum(
             item.reorder_quantity or 0
             for item in recommendations

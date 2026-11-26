@@ -60,7 +60,7 @@ FastAPI Application
 
 ## Verification
 
-Latest Phase 5.1.1 verification: **130 passed, 1 warning** (71 Phase 5.1 baseline cases plus 59 provider-resilience cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
+Latest Phase 5.2 verification: **158 passed, 1 warning** (130 baseline cases plus 28 forecasting/reporting reliability cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
 
 The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
 
@@ -299,6 +299,31 @@ Run all tests (they configure isolated temporary SQLite databases and test-only 
 
 
 ## Existing forecasting baseline
+
+### Phase 5.2: physical stock and forecast reliability
+
+The forecast page and Gemini snapshot report three independent dimensions:
+
+| Dimension | Values |
+|---|---|
+| Physical inventory status | Out of stock = zero units; Low stock = positive units at or below minimum; In stock = above minimum |
+| Forecast availability | Available after at least seven complete tracking days; otherwise Insufficient data |
+| Forecast-based risk | Unavailable (`null`) without a forecast; No observed demand for confirmed zero demand; High risk when coverage is at most supplier lead time; otherwise Low risk |
+
+Physical shortages are always displayed, including zero stock with missing history or confirmed zero demand. Completed-day counts include all completed dates in the previous 28 days even when the count is below seven. Today and older dates are excluded. Completed dates with no sales contribute observed zero demand; incomplete dates (even those with some recorded sales) remain unknown and are excluded from the average. Unavailable forecasts and reorder values remain `null` and are displayed as **Unavailable**, never zero. The sales page also shows progress below the seven-day threshold.
+
+Summary counts have explicit scopes:
+
+- `out_of_stock_count`, `physical_low_stock_count`, and `in_stock_count` are mutually exclusive and sum to the product total.
+- `current_shortage_count` is out-of-stock plus positive low-stock products.
+- `predicted_shortage_count` counts only products with positive stock and High risk forecasts, excluding current stockouts. It may overlap Low stock.
+- `attention_count` is the union of current and predicted shortages, counting each product once.
+- `forecast_available_count` and `insufficient_data_count` partition forecast availability independently; do not add them to physical shortage counts.
+- The compatibility `high_risk_count` counts current stockouts plus predicted shortages, without counting a current stockout twice. It now includes stockouts with insufficient history or confirmed zero demand.
+
+Gemini snapshots use the same recommendation and summary functions as the forecast page. Each product adds `physical_inventory_status`, `forecast_availability`, and `forecast_risk`, while retaining `forecast_available`, `tracked_days`, `stockout_risk`, existing demand fields, and reorder fields. The legacy `stockout_risk` label remains combined for compatibility; zero stock now always maps to Out of stock. The legacy snapshot `low_stock_count`/`is_low_stock` remain inclusive of zero stock to preserve their existing threshold meaning; use `physical_low_stock_count` for the exclusive positive-stock count. Snapshot summaries cover only its included products (at most 50), and truncation remains disclosed.
+
+The forecast page keeps its existing cards, badge styling, responsive grid and horizontally scrollable table. It separates physical status, availability, completed tracking days and forecast risk. The formulas below, database schema, Gemini model and provider resilience are unchanged. All 130 baseline test assertions are retained; no existing assertion needed replacement. New tests document the corrected previously untested stockout cases and enforce boundary/count consistency. For manual verification, sign in and view `/forecast` and `/sales` without recording sales or submitting AI chat; review Unavailable cells, completed counts and separate physical/risk labels. Gemini snapshot checks are performed offline in tests.
 
 The daily estimate is total sales on fully tracked days divided by the number of those days, within the 28 days before today. At least seven complete days are required. Verified zero-sale days contribute zero; incomplete days are excluded rather than assumed zero. Weekly demand is the daily estimate multiplied by seven. The forecast report rounds seven-day and thirty-day demand upward to whole units.
 
