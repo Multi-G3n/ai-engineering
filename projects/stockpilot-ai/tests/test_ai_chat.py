@@ -439,3 +439,23 @@ def test_ai_page_loads_for_authenticated_user(ai_env):
 
     assert response.status_code == 200
     assert "AI Assistant" in response.text
+
+
+@pytest.mark.parametrize("category,status,message", [
+    ("timeout", 504, "timed out"),
+    ("rate_limit", 429, "rate-limited"),
+    ("authentication", 502, "could not authenticate"),
+    ("invalid_request", 502, "could not process"),
+    ("configuration", 503, "not configured correctly"),
+    ("unexpected", 503, "currently unavailable"),
+])
+def test_ai_chat_returns_only_safe_classified_errors(ai_env, category, status, message):
+    client, _ = ai_env
+    login_test_client(client)
+    with patch("app.main.ask_inventory_assistant", side_effect=AIServiceError(
+        "SECRET_RAW_EXCEPTION", category=category,
+    )):
+        response = client.post("/ai/chat", json={"question": "What should I restock?"})
+    assert response.status_code == status
+    assert message in response.json()["detail"]
+    assert "SECRET_RAW_EXCEPTION" not in response.text

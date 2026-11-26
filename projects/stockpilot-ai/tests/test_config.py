@@ -14,6 +14,7 @@ from app import config
 VARIABLES = (
     "DATABASE_URL", "STOCKPILOT_SECRET_KEY", "STOCKPILOT_COOKIE_SECURE",
     "GEMINI_API_KEY", "GEMINI_MODEL",
+    "GEMINI_REQUEST_TIMEOUT_SECONDS", "GEMINI_TOTAL_BUDGET_SECONDS", "GEMINI_MAX_ATTEMPTS",
 )
 
 
@@ -56,6 +57,9 @@ def test_process_environment_overrides_dotenv_including_empty_values(tmp_path, m
         "STOCKPILOT_COOKIE_SECURE": "true",
         "GEMINI_API_KEY": "",
         "GEMINI_MODEL": "process-model",
+        "GEMINI_REQUEST_TIMEOUT_SECONDS": "15",
+        "GEMINI_TOTAL_BUDGET_SECONDS": "25",
+        "GEMINI_MAX_ATTEMPTS": "1",
     }
     monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
     for name, value in values.items():
@@ -67,6 +71,7 @@ def test_process_environment_overrides_dotenv_including_empty_values(tmp_path, m
     assert all(os.environ[name] == value for name, value in values.items())
     assert config.gemini_api_key() == ""
     assert config.gemini_model() == "process-model"
+    assert config.gemini_request_settings() == config.GeminiRequestSettings(15, 25, 1)
 
 
 def test_defaults_without_dotenv_and_required_session_key(tmp_path, monkeypatch):
@@ -79,6 +84,7 @@ def test_defaults_without_dotenv_and_required_session_key(tmp_path, monkeypatch)
     assert config.session_cookie_secure() is True
     assert config.gemini_api_key() is None
     assert config.gemini_model() == "gemini-3.1-flash-lite"
+    assert config.gemini_request_settings() == config.GeminiRequestSettings(30, 60, 2)
     with pytest.raises(RuntimeError, match="at least 32 characters"):
         config.session_secret_key()
 

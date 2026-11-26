@@ -60,7 +60,7 @@ FastAPI Application
 
 ## Verification
 
-Latest Phase 5.1 verification: **71 passed, 1 warning** (58 baseline cases plus 13 configuration and operational consistency cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
+Latest Phase 5.1.1 verification: **130 passed, 1 warning** (71 Phase 5.1 baseline cases plus 59 provider-resilience cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
 
 The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
 
@@ -155,9 +155,40 @@ Configuration is independent of working directory; Python still needs the projec
 
 ## Gemini configuration
 
-Provide your Gemini API key through `GEMINI_API_KEY` in the hosting environment or the project `.env`. Optionally override `GEMINI_MODEL` with a model available to your account. Never put keys in source control or shell examples. Inventory pages and deterministic forecasting work without an API key; AI chat reports that the key is not configured.
+Provide your Gemini API key through `GEMINI_API_KEY` in the hosting environment or the project `.env`. The model remains `gemini-3.1-flash-lite`. Never put keys in source control or shell examples. Inventory pages and deterministic forecasting work without an API key; AI chat returns a safe configuration message if the key is missing.
 
 The assistant sends a snapshot of up to 50 products and the user question to Google Gemini. Python computes all demand and reorder quantities; Gemini explains those supplied results. Model availability and account permissions are not verified by the offline tests.
+
+### Phase 5.1.1: AI provider resilience
+
+The same centralized configuration supplies these optional settings. Process environment variables override the project `.env`; restart the application after changing configuration. This milestone does not modify your existing `.env`.
+
+| Variable | Default | Accepted values |
+|---|---|---|
+| `GEMINI_REQUEST_TIMEOUT_SECONDS` | `30` | Finite number from 0.1 to 300 seconds |
+| `GEMINI_TOTAL_BUDGET_SECONDS` | `60` | Finite number from 0.1 to 600 seconds |
+| `GEMINI_MAX_ATTEMPTS` | `2` | `1` or `2`, including the initial attempt |
+
+The installed `google-genai==2.34.0` SDK uses **milliseconds** for `HttpOptions.timeout`; application seconds are converted to milliseconds. Each attempt uses the smaller of its configured timeout and the remaining total budget. Async cancellation bounds provider I/O and retry waits together, including a stalled provider call. The public service remains synchronous for the existing FastAPI worker-thread handler. Local client setup is checked against the budget before sending; synchronous setup cannot be preempted by async cancellation. Resource cleanup has a separate allowance of up to one second for async close, followed by local synchronous close. Snapshot building and prompt preparation are outside this provider budget.
+
+Only HTTP 500, 502, 503, 504, request timeouts (including 408), and transient network failures are retried. The delay uses exponential backoff with jitter: 0.25–0.5 seconds before the second attempt. SDK retries are explicitly limited to one attempt so application retries do not multiply SDK retries.
+
+HTTP 429 is handled separately: retry only when a valid `Retry-After` seconds value or HTTP date is supplied and the wait fits the remaining budget. The wait is at least the larger of that value and the jittered backoff; a past date means no additional provider-mandated delay. Missing/invalid headers or waits exceeding the budget return the rate-limit message immediately. Authentication, invalid requests, initialization failures, empty answers and unexpected errors are not retried. **A retry can cause additional billable API usage**, even if the first request timed out after reaching the provider. This is a read-only explanation request; no inventory action is retried.
+
+| Failure | Application HTTP status | Safe user message |
+|---|---|---|
+| Deadline/timeout | 504 | The AI request timed out. Please try again. |
+| Rate limit | 429 | The AI service is rate-limited. Please try again later. |
+| Provider authentication (401/403) | 502 | The AI service could not authenticate. Please contact the administrator. |
+| Other provider 4xx | 502 | The AI service could not process this request. Please try a different question. |
+| Missing/invalid local configuration | 503 | The AI service is not configured correctly. Please contact the administrator. |
+| Provider service/empty answer/unexpected failure | 503 | The Gemini service is currently unavailable. |
+
+Local question validation still returns 422. Authentication and CSRF requirements are unchanged. Existing chat JavaScript displays the safe `detail` as text and clears its loading state in `finally` on both success and failure.
+
+The standard Python logger `app.ai_provider` records allowlisted error category, numeric upstream HTTP status (when available), sanitized model identifier, elapsed seconds, attempt number and lifecycle stage. Failures use WARNING, successes use INFO (enable INFO for this logger in your deployment logging configuration). These fields are included in the formatted message and attached to the log record for structured handlers. No raw provider messages, payloads, exception tracebacks, keys, prompts or inventory snapshots are logged by this boundary. Client initialization uses attempt zero. The browser receives allowlisted messages only, even if an internal exception contains sensitive text.
+
+Tests mock all Gemini traffic and retry waits, exercise cancellation with a stalled async mock, and verify the installed SDK using in-memory HTTP transports. Run the complete suite with the repository-root virtual environment as shown below. For manual verification, start the local app and check sign-in/AI page rendering without submitting chat. An authenticated chat submission calls the live provider and may incur usage; perform that separately only when intended. Check WARNING logs for sanitized status/category/attempt fields if a failure occurs. No successful live generation or provider recovery is claimed by the offline suite.
 
 ## Test
 

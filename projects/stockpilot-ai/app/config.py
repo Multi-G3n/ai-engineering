@@ -1,6 +1,8 @@
 """Shared configuration for the web app, Alembic, and command-line utilities."""
 
 import os
+import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -36,6 +38,35 @@ def gemini_api_key() -> str | None:
 
 def gemini_model() -> str:
     return os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
+
+@dataclass(frozen=True)
+class GeminiRequestSettings:
+    timeout_seconds: float
+    total_budget_seconds: float
+    max_attempts: int
+
+
+def gemini_request_settings() -> GeminiRequestSettings:
+    """Validate without including supplied configuration values in errors."""
+    def seconds(name: str, default: str, maximum: float) -> float:
+        try:
+            value = float(os.getenv(name, default))
+        except ValueError:
+            raise ValueError(f"{name} must be a finite number between 0.1 and {maximum} seconds.") from None
+        if not math.isfinite(value) or not 0.1 <= value <= maximum:
+            raise ValueError(f"{name} must be a finite number between 0.1 and {maximum} seconds.")
+        return value
+
+    timeout = seconds("GEMINI_REQUEST_TIMEOUT_SECONDS", "30", 300)
+    budget = seconds("GEMINI_TOTAL_BUDGET_SECONDS", "60", 600)
+    try:
+        attempts = int(os.getenv("GEMINI_MAX_ATTEMPTS", "2"))
+    except ValueError:
+        raise ValueError("GEMINI_MAX_ATTEMPTS must be 1 or 2.") from None
+    if attempts not in (1, 2):
+        raise ValueError("GEMINI_MAX_ATTEMPTS must be 1 or 2.")
+    return GeminiRequestSettings(timeout, budget, attempts)
 
 
 def session_secret_key() -> str:

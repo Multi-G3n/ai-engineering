@@ -2,11 +2,10 @@
 import json
 from datetime import date
 
-from google import genai
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import gemini_api_key, gemini_model
+from app.ai_provider import AIServiceError, generate_inventory_answer
 from app.models import Product
 from app.services import simple_demand_forecast
 from app.forecasting import (
@@ -21,10 +20,6 @@ from app.forecasting import (
 # ============================================================
 
 MAX_PRODUCTS = 50
-
-
-class AIServiceError(Exception):
-    """Raised when the AI service cannot answer."""
 
 
 # ============================================================
@@ -228,17 +223,6 @@ def ask_inventory_assistant(
     """
 
     # ========================================================
-    # API CONFIGURATION
-    # ========================================================
-
-    api_key = gemini_api_key()
-
-    if not api_key:
-        raise AIServiceError(
-            "GEMINI_API_KEY is not configured."
-        )
-
-    # ========================================================
     # QUESTION VALIDATION
     # ========================================================
 
@@ -246,10 +230,6 @@ def ask_inventory_assistant(
         raise AIServiceError(
             "Question must contain 3 to 500 characters."
         )
-
-    client = genai.Client(
-        api_key=api_key
-    )
 
     # ========================================================
     # AI SYSTEM INSTRUCTIONS
@@ -338,28 +318,4 @@ You must follow these rules:
     # GEMINI API REQUEST
     # ========================================================
 
-    try:
-
-        response = client.models.generate_content(
-            model=gemini_model(),
-            contents=prompt,
-            config={
-                "temperature": 0.2,
-                "max_output_tokens": 1000,
-            },
-        )
-
-        if not response.text:
-            raise AIServiceError(
-                "Gemini returned an empty response."
-            )
-
-        return response.text.strip()
-
-    except AIServiceError:
-        raise
-
-    except Exception as exc:
-        raise AIServiceError(
-            "The Gemini service is currently unavailable."
-        ) from exc
+    return generate_inventory_answer(prompt)

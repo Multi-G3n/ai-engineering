@@ -402,8 +402,8 @@ def ai_chat(
         )
     except AIServiceError as exc:
         raise HTTPException(
-            status_code=503,
-            detail=str(exc),
+            status_code=exc.http_status,
+            detail=exc.public_message,
         ) from exc
 
     return {
