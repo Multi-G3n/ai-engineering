@@ -98,3 +98,54 @@ class SalesTrackingDay(Base):
     sales_date: Mapped[date] = mapped_column(Date, index=True)
     marked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     product: Mapped[Product] = relationship(back_populates="sales_tracking_days")
+
+
+class SalesImportBatch(Base):
+    __tablename__ = "sales_import_batches"
+    __table_args__ = (
+        CheckConstraint("total_rows >= 0 AND imported_rows >= 0 AND duplicate_rows >= 0", name="ck_import_counts_nonnegative"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    confirmation_key: Mapped[str] = mapped_column(String(36), unique=True)
+    source: Mapped[str] = mapped_column(String(100))
+    filename: Mapped[str] = mapped_column(String(160))
+    file_sha256: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    total_rows: Mapped[int] = mapped_column(Integer)
+    imported_rows: Mapped[int] = mapped_column(Integer)
+    duplicate_rows: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class HistoricalSale(Base):
+    __tablename__ = "historical_sales"
+    __table_args__ = (
+        UniqueConstraint("external_sale_id", name="uq_historical_external_sale_id"),
+        CheckConstraint("quantity_sold > 0", name="ck_historical_quantity_positive"),
+        CheckConstraint("unit_selling_price >= 0", name="ck_historical_price_nonnegative"),
+        CheckConstraint("source_line >= 2", name="ck_historical_source_line"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_batch_id: Mapped[int] = mapped_column(ForeignKey("sales_import_batches.id", ondelete="RESTRICT"))
+    external_sale_id: Mapped[str] = mapped_column(String(128))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
+    sale_date: Mapped[date] = mapped_column(Date, index=True)
+    quantity_sold: Mapped[int] = mapped_column(Integer)
+    unit_selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    source_line: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class HistoricalSalesCoverage(Base):
+    __tablename__ = "historical_sales_coverage"
+    __table_args__ = (UniqueConstraint("product_id", "sales_date", name="uq_historical_coverage_product_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
+    sales_date: Mapped[date] = mapped_column(Date, index=True)
+    source: Mapped[str] = mapped_column(String(100))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    reason: Mapped[str] = mapped_column(String(240))
+    marked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

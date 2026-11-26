@@ -60,7 +60,7 @@ FastAPI Application
 
 ## Verification
 
-Latest Phase 5.3 verification: **177 passed, 1 warning** (158 baseline cases plus 19 migration reliability cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
+Latest Phase 6 verification: **254 passed, 1 warning** (177 baseline cases plus 77 historical import cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
 
 The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
 
@@ -278,7 +278,7 @@ This is a write operation: back up and verify the selected database first. Alemb
 
 ### Revision chain and compatibility strategy
 
-The single revision chain is `base -> 20261016_2b -> 20261016_3b -> 20261126_53`.
+Phase 5.3 established `base -> 20261016_2b -> 20261016_3b -> 20261126_53`. Phase 6 extends that single chain with `20261126_6`.
 
 The original `2b` imported the current ORM models and called `Base.metadata.create_all()`. As models evolved, replaying that revision could create future tables (including `users` ahead of `3b`), while leaving missing constraints and indexes unchanged on legacy tables. It also created redundant unique indexes when equivalent unique constraints already existed. SQLite legacy primary-key nullability and missing checks/indexes could therefore differ from fresh installations at the same revision.
 
@@ -306,7 +306,7 @@ Configure the project as described above, using the repository-root environment.
 ..\..\.venv\Scripts\python.exe -m alembic current
 ```
 
-The current revision should be `20261126_53`. An existing installation must follow the backup/upgrade sequence instead of treating its database as new. Never overwrite an existing `.env` or database to initialize the application.
+The current revision should be `20261126_6` (Phase 6). An existing installation must follow the backup/upgrade sequence instead of treating its database as new. Never overwrite an existing `.env` or database to initialize the application.
 
 ### Existing installation upgrade
 
@@ -390,7 +390,80 @@ The daily estimate is total sales on fully tracked days divided by the number of
 
 Reorder quantity is `max(0, max(minimum_stock, ceil(daily_demand * (lead_time_days + safety_stock_days))) - current_stock)`. Current planning defaults are seven lead-time days and seven safety-stock days, passed as Python arguments. There are no supplier-specific settings or planning environment variables.
 
-These are deterministic calculations, not a trained machine-learning model. They do not account for trends, seasonality, holidays, stockouts or incoming orders. Historical sales import and ML training are future work; entering a sale through the current form always deducts current stock.
+These are deterministic calculations, not a trained machine-learning model. They do not account for trends, seasonality, holidays, stockouts or incoming orders. Historical sales import is available through the separate Phase 6 workflow below; entering a sale through the operational form still deducts current stock. ML training remains future work.
+
+## Phase 6: historical sales import
+
+### Architecture and ownership
+
+Historical transactions use dedicated tables rather than extending `SalesRecord`. Existing operational sales atomically deduct stock and create linked inventory movements; imported history must never execute that path. `HistoricalSale` stores the historical product/date, quantity, original unit price, globally unique external ID, batch and CSV line. `SalesImportBatch` stores the source label, sanitized filename, SHA-256 of the original bytes, confirming administrator, timestamp, confirmation key and row counts. `HistoricalSalesCoverage` stores explicit product/date completeness with source, administrator, timestamp and verification reason. Foreign keys restrict deletion of referenced products, users and batches. The raw CSV is not retained in the database.
+
+For a given product/date, operational sales/operational coverage and historical sales/historical coverage are mutually exclusive. Existing operational records have no external transaction IDs, so safe transaction-level matching is impossible: ambiguous overlaps are rejected rather than guessed. SQLite triggers enforce ownership on insert/update in both directions, including direct operational inserts after an import. Additional historical records are blocked once historical coverage is complete. A product/date may have records from only one historical source. Ordinary operational sales on other dates/products retain their existing behavior.
+
+### CSV format
+
+Download the header-only template from `/sales/import/template` after signing in. Use UTF-8, optionally with a UTF-8 BOM. All five named columns are required exactly once; their order can vary and extra columns are rejected. Illustrative rows (replace with verified data and existing SKUs):
+
+```csv
+external_sale_id,sale_date,sku,quantity,unit_price
+archive/1001,2026-10-01,SP-1001,3,59.90
+archive/1002,2026-10-02,SP-1002,2,249.00
+```
+
+- External IDs are stable and globally unique across all sources: 1–128 ASCII letters/digits or `._:/-`, beginning with a letter or digit. Use coordinated prefixes where sources reuse IDs. Do not rename IDs on retries.
+- Dates must be exact `YYYY-MM-DD`, strictly before the application's current date. Today and future dates are rejected again during confirmation.
+- SKUs must already exist, match exactly, fit 64 characters, and contain no surrounding whitespace/control characters. Imports never create products.
+- Quantity is a positive whole number, at most 2,147,483,647.
+- Unit price is mandatory, from 0 to 99,999,999.99, using plain non-negative decimal notation with at most two decimal places. No exponent notation, NaN, infinity, currency symbols or rounding of invalid input. Decimal arithmetic and formatting preserve cents in preview totals.
+- Files are limited to **1 MiB** and **5,000 sales rows**. Individual fields are capped at 160 characters before their specific validators. Empty files, header-only files, invalid UTF-8/NUL bytes, malformed quoting, blank records and wrong field counts are rejected. A malformed/oversized file blocks confirmation, even when some records were parsed.
+
+### Preview and confirmation
+
+1. Open **Sales → Historical Sales Import** (`/sales/import`). Supply a consistent source label (1–100 characters) and upload the CSV.
+2. Review filename, parsed row count, valid-new/invalid/duplicate/conflicting counts, validated date range, product count, new quantity, new sales value and row-level errors. New quantity/value exclude duplicates and rejected rows. Preview performs no database writes.
+3. Resolve every invalid/conflicting row and file error. Otherwise, explicitly select **Confirm historical import** within 15 minutes. Confirmation never trusts submitted row data: it verifies the signed payload, administrator and session nonce, reserves SQLite's writer lock, and reruns validation against the current database.
+4. Check the saved batch result and import history. The page shows the latest 20 committed batches, 50 historical records and 20 coverage declarations. A confirmed duplicate-only file records a batch with zero inserted transactions.
+
+The signed preview contains the uploaded data, filename and source. It is integrity-protected, **not encrypted**, and is submitted in the confirmation POST rather than a URL. Only the latest preview in that session is valid; a new upload, failed confirmation or completed confirmation invalidates the previous nonce. The page uses `Cache-Control: no-store`. Do not share preview HTML or tokens. Starting a new preview in another tab invalidates the earlier one.
+
+### Duplicates, conflicts and atomicity
+
+An identical external ID with identical product/date/quantity/price/source is an explicit duplicate, whether within the file or in an earlier batch. It is counted and skipped. Reusing an ID with different content or source is a conflict; conflicting IDs within a file flag all affected valid rows and block the entire import. Unknown SKUs and other invalid records also block the entire import; there is no partial valid-row import mode.
+
+Database uniqueness protects external IDs and confirmation keys. Confirmation serializes SQLite writers before revalidation, then commits batch and new historical rows together. Concurrent identical confirmations cannot insert duplicate transactions. If an operational sale wins the race, the import is rejected; if history wins, the operational sale is rejected and its stock deduction rolls back. Unexpected failures roll back all pending rows and show safe messages without raw database exceptions. Current inventory quantities and `InventoryMovement` records are never changed by historical import or historical coverage declarations.
+
+External IDs remain the primary transaction identity: the system cannot detect the same real-world sale deliberately submitted under different IDs from the same source. Source labels and completeness assertions require trusted administrator review. Different sources cannot contribute transactions to the same product/date; neither fuzzy matching nor automatic reconciliation is provided.
+
+### Coverage and forecasting
+
+Imported rows show recorded historical quantity, but do **not** prove a complete day. After importing every transaction for a product/date, separately declare verified historical coverage with its matching source and a reason (1–240 characters). A declaration for a date with no historical transactions records a confirmed zero-sales day. Dates without declarations stay unknown, even when they have partial imported sales. Operational coverage remains managed by the operational workflow and cannot overlap historical ownership.
+
+Completed historical days and completed operational days contribute through the existing daily-demand summary on separate product/date pairs. The 28 days before today, seven-completed-day minimum, daily/weekly average, stock classifications, forecast availability and reorder formulas are unchanged. History older than the window is retained but does not contribute to the current forecast. Gemini snapshots use those same calculated results; model settings, provider resilience and live-call behavior are unchanged. No ML model is introduced.
+
+Declare coverage only after all records for that date are loaded: new historical rows cannot be appended to a completed date. Exact duplicate reimports remain safe. This phase has no automatic reopen, edit, delete, refund or reconciliation workflow. A correction requires a separate reviewed procedure; do not bypass overlap/uniqueness guards or delete operational data to force an import.
+
+### Security, migration and recovery
+
+Every import page/template requires an active administrator. All preview, confirmation and coverage POSTs require the existing CSRF token. Filenames are reduced to safe display names and are never used as storage paths. Imported values are HTML-escaped, never executed; the template download contains only fixed headers. Actual request bodies are limited to **3 MiB before multipart parsing**, independent of Content-Length; signed tokens are capped at 2 MiB. The framework may spool bounded multipart data temporarily, but the application does not persist raw uploads. Production HTTPS and existing secure session-cookie settings still apply. Administrators should keep original source files securely outside the application; the stored SHA-256 identifies their exact bytes.
+
+The new explicit migration is `20261126_6`, descending from `20261126_53`. It creates three additive tables, indexes, constraints and ownership triggers; it does not import evolving ORM models or change existing stock, prices, sales, movements, users or coverage. Fresh installation replays the complete chain. For an existing Phase 5.3 installation, stop writers, verify the selected database, retain a verified backup, then run from the project directory:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m app.backup_db
+..\..\.venv\Scripts\python.exe -m app.init_db
+..\..\.venv\Scripts\python.exe -m alembic current
+..\..\.venv\Scripts\python.exe -m alembic check
+```
+
+The expected head is `20261126_6`. These are operator steps; development tests migrate temporary databases only. Upgrade before serving the new code, since sales summaries now query the historical tables. Do not alter an actual `.env` or use `stamp head` instead of migration. Use Alembic rather than `create_all()` to install the ownership triggers: ORM metadata and Alembic's ordinary schema-diff check do not validate those triggers; migrated integration tests exercise them separately. The SQLite backup API includes historical rows, provenance, coverage and triggers; recovery verification tests check those objects too. On failure, stop and retain the database and source file. Re-preview to confirm whether an import committed rather than blindly renaming IDs or deleting batches. For recovery, use the separate-file backup verification procedure above; never overwrite the only copy of newer business records. Downgrades are disabled.
+
+SQLite and the existing Python environment remain required. XLSX/ZIP files, automatic product creation, corrections, multi-source/day reconciliation, background ingestion, pagination/export of complete import history, and shared import rate limiting are outside this phase. Request/row limits bound individual work; deployments should also configure proxy upload/time limits and protect administrator access. No dependencies were added or upgraded.
+
+### Verification and baseline test changes
+
+The complete suite includes preview read-only checks, validation/BOM/limits, deduplication/conflicts, insert/commit rollback, concurrent confirmations and operational races, stock/movement preservation, coverage semantics, forecasting boundaries, authentication/CSRF, token tampering/expiry/session binding, safe rendering, backup recovery and fresh/Phase-5.3 migrations. Gemini is blocked or mocked throughout.
+
+All 177 baseline cases are retained. Expected-head/chain assertions advance to `20261126_6`. The legacy-head fixture now uses the frozen five-table Phase 5.3 schema rather than today's evolving metadata, so it continues to represent an actual pre-import installation. Original data-preservation assertions remain. No baseline tests were removed.
 
 ## Phase 5.1 verification
 

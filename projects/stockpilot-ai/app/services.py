@@ -2,12 +2,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, union_all
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import InventoryMovement, Product, SalesRecord, SalesTrackingDay
+from app.models import HistoricalSale, HistoricalSalesCoverage, InventoryMovement, Product, SalesRecord, SalesTrackingDay
 from app.schemas import AdjustmentInput, ProductInput, SaleInput
 
 
@@ -33,6 +33,17 @@ class DuplicateSaleError(ValueError):
 
 class DemandRangeError(ValueError):
     pass
+
+
+class SalesOverlapError(ValueError):
+    pass
+
+
+def _reject_historical_overlap(db: Session, product_id: int, day: date):
+    if db.scalar(select(HistoricalSale.id).where(HistoricalSale.product_id == product_id, HistoricalSale.sale_date == day)) or db.scalar(
+        select(HistoricalSalesCoverage.id).where(HistoricalSalesCoverage.product_id == product_id, HistoricalSalesCoverage.sales_date == day)
+    ):
+        raise SalesOverlapError("Historical data or coverage own this product/date; operational sales and coverage cannot overlap it.")
 
 
 MAX_DAILY_DEMAND_RANGE_DAYS = 3660
@@ -133,6 +144,7 @@ def record_sale(db: Session, data: SaleInput) -> SalesRecord:
         product = db.get(Product, data.product_id)
         if product is None:
             raise ProductNotFoundError("Select an existing product.")
+        _reject_historical_overlap(db, data.product_id, data.sale_date)
         price = data.unit_selling_price if data.unit_selling_price is not None else product.unit_price
 
         result = db.execute(
@@ -168,6 +180,8 @@ def record_sale(db: Session, data: SaleInput) -> SalesRecord:
         return sale
     except IntegrityError as exc:
         db.rollback()
+        if "historical_operational_overlap" in str(exc.orig):
+            raise SalesOverlapError("Historical data now own this product/date. This sale was not recorded and stock is unchanged.") from None
         if db.scalar(select(SalesRecord.id).where(SalesRecord.idempotency_key == str(data.idempotency_key))) is not None:
             raise DuplicateSaleError("This sale form was already submitted. Refresh the page to record another sale.") from exc
         raise
@@ -181,8 +195,14 @@ def mark_sales_day_complete(db: Session, product_id: int, tracked_date: date) ->
     try:
         if db.get(Product, product_id) is None:
             raise ProductNotFoundError("Select an existing product.")
+        _reject_historical_overlap(db, product_id, tracked_date)
         _mark_tracking_complete(db, product_id, tracked_date)
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if "historical_operational_overlap" in str(exc.orig):
+            raise SalesOverlapError("Historical data now own this product/date. Coverage was not changed.") from None
+        raise
     except Exception:
         db.rollback()
         raise
@@ -196,15 +216,13 @@ def daily_demand_summary(
         raise ValueError("End date must be on or after start date.")
     if (end_date - start_date).days + 1 > MAX_DAILY_DEMAND_RANGE_DAYS:
         raise DemandRangeError(f"Choose a date range of {MAX_DAILY_DEMAND_RANGE_DAYS} days or fewer.")
-    totals = dict(db.execute(
-        select(SalesRecord.sale_date, func.sum(SalesRecord.quantity_sold))
-        .where(
-            SalesRecord.product_id == product_id,
-            SalesRecord.sale_date >= start_date,
-            SalesRecord.sale_date <= end_date,
-        )
-        .group_by(SalesRecord.sale_date)
-    ).all())
+    combined = union_all(
+        select(SalesRecord.sale_date.label("sale_date"), SalesRecord.quantity_sold.label("quantity"))
+        .where(SalesRecord.product_id == product_id, SalesRecord.sale_date >= start_date, SalesRecord.sale_date <= end_date),
+        select(HistoricalSale.sale_date, HistoricalSale.quantity_sold)
+        .where(HistoricalSale.product_id == product_id, HistoricalSale.sale_date >= start_date, HistoricalSale.sale_date <= end_date),
+    ).subquery()
+    totals = dict(db.execute(select(combined.c.sale_date, func.sum(combined.c.quantity)).group_by(combined.c.sale_date)).all())
     tracked_dates = set(db.scalars(
         select(SalesTrackingDay.sales_date).where(
             SalesTrackingDay.product_id == product_id,
@@ -212,6 +230,10 @@ def daily_demand_summary(
             SalesTrackingDay.sales_date <= end_date,
         )
     ).all())
+    tracked_dates.update(db.scalars(select(HistoricalSalesCoverage.sales_date).where(
+        HistoricalSalesCoverage.product_id == product_id, HistoricalSalesCoverage.sales_date >= start_date,
+        HistoricalSalesCoverage.sales_date <= end_date,
+    )).all())
     points = []
     day = start_date
     while day <= end_date:

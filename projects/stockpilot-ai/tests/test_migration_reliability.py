@@ -16,9 +16,10 @@ import sqlalchemy as sa
 
 from app import backup_db, init_db
 from app.database import Base
+from migrations.schema_20261016 import metadata as historical_metadata
 
 PROJECT = Path(__file__).resolve().parents[1]
-HEAD = "20261126_53"
+HEAD = "20261126_6"
 BUSINESS = ("products", "sales_records", "sales_tracking_days", "inventory_movements", "users")
 
 
@@ -82,7 +83,7 @@ def populate(database):
 def old_head(monkeypatch, database):
     """Reproduce the original model-created 3b layout, including redundant indexes."""
     engine = sa.create_engine(f"sqlite:///{database.as_posix()}")
-    Base.metadata.create_all(engine)
+    historical_metadata(include_users=True).create_all(engine)
     with engine.begin() as connection:
         connection.exec_driver_sql("CREATE UNIQUE INDEX uq_sales_idempotency_key ON sales_records(idempotency_key)")
         connection.exec_driver_sql("CREATE UNIQUE INDEX uq_inventory_movement_sales_record ON inventory_movements(sales_record_id)")
@@ -133,7 +134,7 @@ def test_revision_chain_has_one_head_and_expected_order():
     script = ScriptDirectory.from_config(Config(str(PROJECT / "alembic.ini")))
     assert script.get_heads() == [HEAD]
     assert [r.revision for r in reversed(list(script.walk_revisions()))] == [
-        "20261016_2b", "20261016_3b", HEAD,
+        "20261016_2b", "20261016_3b", "20261126_53", HEAD,
     ]
 
 

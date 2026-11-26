@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Historical Sales Import · StockPilot{% endblock %}
+{% block crumb %}Sales / Historical import{% endblock %}
+{% block content %}
+<div class="page-heading"><div><div class="eyebrow">HISTORICAL SALES</div><h1>Historical Sales Import</h1><p>Validate and import past sales without changing current inventory.</p></div><a class="button secondary" href="/sales">Back to sales</a></div>
+{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+{% if message %}<div class="notice" role="status">{{ message }}</div>{% endif %}
+{% if result %}<div class="notice" role="status"><strong>Historical import saved — batch #{{ result.id }}</strong><span>{{ result.imported_rows }} records imported; {{ result.duplicate_rows }} duplicate rows skipped. Current stock and inventory movements are unchanged. Coverage has not been marked complete.</span></div>{% endif %}
+<section class="panel form-panel">
+  <h2>1. Upload and preview</h2>
+  <p>Use UTF-8 CSV (BOM supported), at most 1 MiB and 5,000 sales rows. Required columns: external_sale_id, sale_date, sku, quantity, unit_price.</p>
+  <p>Dates must be YYYY-MM-DD and before today. Quantities must be positive whole units; prices must be non-negative amounts with at most two decimal places. SKUs must already exist. No products are created automatically.</p>
+  <p>Use one consistent source label and stable, globally unique sale IDs. Operational sales or operational coverage for a product/date prevent historical imports on that date. Different historical sources cannot share a product/date. Do not rename IDs to bypass duplicates.</p>
+  <p><a class="button secondary" href="/sales/import/template">Download CSV template</a></p>
+  <form method="post" action="/sales/import/preview" enctype="multipart/form-data">
+    {% include "_csrf_field.html" %}
+    <div class="form-stack"><label>Source system or dataset<input name="source" required maxlength="100" placeholder="e.g. Archived POS"></label><label>CSV file<input type="file" name="file" accept=".csv,text/csv" required></label></div>
+    <div class="form-actions"><button class="button primary" type="submit">Validate and preview</button></div>
+  </form>
+</section>
+{% if preview %}
+<section class="panel form-panel">
+  <h2>2. Review preview</h2><p>File: <strong>{{ preview.filename }}</strong> · Source: {{ preview.source }}</p>
+  {% for problem in preview.file_errors %}<div class="alert">{{ problem }}</div>{% endfor %}
+  <dl class="form-grid">
+    <div><dt>Total parsed rows</dt><dd>{{ preview.rows|length }}</dd></div>
+    <div><dt>Valid new rows</dt><dd>{{ preview.count('valid') }}</dd></div>
+    <div><dt>Invalid rows</dt><dd>{{ preview.count('invalid') }}</dd></div>
+    <div><dt>Duplicate rows</dt><dd>{{ preview.count('duplicate') }}</dd></div>
+    <div><dt>Conflicting rows</dt><dd>{{ preview.count('conflict') }}</dd></div>
+    <div><dt>Validated date range</dt><dd>{% if preview.date_range %}{{ preview.date_range[0] }} to {{ preview.date_range[1] }}{% else %}Unavailable{% endif %}</dd></div>
+    <div><dt>Validated products</dt><dd>{{ preview.product_count }}</dd></div>
+    <div><dt>New historical quantity</dt><dd>{{ preview.total_quantity }}</dd></div>
+    <div><dt>New historical sales value</dt><dd>RM {{ '{:.2f}'.format(preview.sales_value) }}</dd></div>
+  </dl>
+  <p>New quantity/value exclude duplicates and rejected rows. A malformed file may have unparsed rows. Any invalid/conflicting row or file error blocks the entire import. Preview has not written database records.</p>
+  <div class="table-wrap"><table><thead><tr><th>LINE</th><th>EXTERNAL ID</th><th>DATE</th><th>SKU</th><th>QUANTITY</th><th>UNIT PRICE</th><th>STATUS / ERRORS</th></tr></thead><tbody>
+    {% for row in preview.rows %}<tr><td>{{ row.line }}</td><td>{{ row.values.get('external_sale_id', '') }}</td><td>{{ row.values.get('sale_date', '') }}</td><td>{{ row.values.get('sku', '') }}</td><td>{{ row.values.get('quantity', '') }}</td><td>{{ row.values.get('unit_price', '') }}</td><td>{{ row.status }}{% for problem in row.errors %}<p>{{ problem }}</p>{% endfor %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if preview.can_import and preview_token %}<form method="post" action="/sales/import/confirm">{% include "_csrf_field.html" %}<input type="hidden" name="preview_token" value="{{ preview_token }}"><p>Confirmation expires after 15 minutes and revalidates current database state. Only the latest preview in this session can be confirmed. It does not assert complete daily coverage.</p><button class="button primary" type="submit">Confirm historical import</button></form>{% endif %}
+</section>
+{% endif %}
+<section class="panel form-panel">
+  <h2>3. Declare verified historical coverage</h2>
+  <p>Import all sales for a product/date first. Only mark it complete after independently verifying the source is complete. A date with no imported records becomes a confirmed zero-sales day. Missing dates remain unknown.</p>
+  <p>Completing a date locks it against further historical records. Operational data/coverage cannot overlap it. Corrections require a separate reviewed procedure; there is no automatic reopening or deletion.</p>
+  <form method="post" action="/sales/import/coverage">{% include "_csrf_field.html" %}<div class="form-grid">
+    <label>Product<select name="product_id" required>{% for product in products %}<option value="{{ product.id }}">{{ product.sku }} · {{ product.name }}</option>{% endfor %}</select></label>
+    <label>Historical date<input type="date" name="sales_date" required></label>
+    <label>Source (must match imported records)<input name="source" required maxlength="100"></label>
+    <label>Verification reason<input name="reason" required maxlength="240" placeholder="How was complete coverage verified?"></label>
+  </div><div class="form-actions"><button class="button secondary" type="submit" {% if not products %}disabled{% endif %}>Declare date fully tracked</button></div></form>
+</section>
+<section class="panel"><div class="panel-heading"><div><h2>Import history</h2><p>Latest 20 committed batches, including confirmed duplicate-only uploads.</p></div></div><div class="table-wrap"><table><thead><tr><th>BATCH / TIME</th><th>FILE / SOURCE</th><th>ADMIN</th><th>IMPORTED</th><th>DUPLICATES</th><th>SHA-256</th></tr></thead><tbody>
+{% for batch in batches %}<tr><td>#{{ batch.id }} · {{ batch.created_at }}</td><td>{{ batch.filename }}<small>{{ batch.source }}</small></td><td>#{{ batch.user_id }}</td><td>{{ batch.imported_rows }}</td><td>{{ batch.duplicate_rows }}</td><td title="{{ batch.file_sha256 }}">{{ batch.file_sha256[:12] }}…</td></tr>{% else %}<tr><td colspan="6" class="empty">No historical imports yet.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><div><h2>Historical records</h2><p>Latest 50 imported transactions. These are separate from operational sales.</p></div></div><div class="table-wrap"><table><thead><tr><th>EXTERNAL ID</th><th>DATE / SKU</th><th>QUANTITY</th><th>UNIT PRICE</th><th>SOURCE</th><th>BATCH / CSV LINE</th></tr></thead><tbody>
+{% for sale, sku, source in historical_rows %}<tr><td>{{ sale.external_sale_id }}</td><td>{{ sale.sale_date }} · {{ sku }}</td><td>{{ sale.quantity_sold }}</td><td>RM {{ '{:.2f}'.format(sale.unit_selling_price) }}</td><td>{{ source }}</td><td>#{{ sale.import_batch_id }} / {{ sale.source_line }}</td></tr>{% else %}<tr><td colspan="6" class="empty">No historical records imported.</td></tr>{% endfor %}
+</tbody></table></div></section>
+<section class="panel"><div class="panel-heading"><div><h2>Historical coverage declarations</h2><p>Latest 20 explicit declarations. Missing dates remain unknown.</p></div></div><div class="table-wrap"><table><thead><tr><th>PRODUCT / DATE</th><th>SOURCE</th><th>VERIFICATION REASON</th><th>ADMIN / TIME</th></tr></thead><tbody>
+{% for coverage, sku in coverage_rows %}<tr><td>{{ sku }} · {{ coverage.sales_date }}</td><td>{{ coverage.source }}</td><td>{{ coverage.reason }}</td><td>#{{ coverage.user_id }} · {{ coverage.marked_at }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No historical coverage declared.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

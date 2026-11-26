@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
+import re
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -73,3 +74,54 @@ class SaleInput(BaseModel):
 class SalesTrackingInput(BaseModel):
     product_id: int = Field(gt=0)
     sales_date: date
+
+
+class HistoricalSaleInput(BaseModel):
+    external_sale_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+    sale_date: date
+    sku: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(gt=0, le=2147483647)
+    unit_price: Decimal = Field(ge=0, max_digits=10, decimal_places=2, allow_inf_nan=False)
+
+    @field_validator("sale_date", mode="before")
+    @classmethod
+    def historical_date(cls, value):
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("Use ISO date YYYY-MM-DD.")
+        result = date.fromisoformat(value)
+        if result >= date.today():
+            raise ValueError("Historical dates must be before today.")
+        return result
+
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def integer_quantity(cls, value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+            raise ValueError("Quantity must be a positive whole number.")
+        return value
+
+    @field_validator("sku")
+    @classmethod
+    def canonical_sku(cls, value):
+        if value != value.strip() or any(ord(c) < 32 for c in value):
+            raise ValueError("SKU must not contain surrounding whitespace or control characters.")
+        return value
+
+    @field_validator("unit_price", mode="before")
+    @classmethod
+    def decimal_price(cls, value):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", value):
+            raise ValueError("Price must be a non-negative decimal with at most two decimal places.")
+        return value
+
+
+class HistoricalCoverageInput(BaseModel):
+    product_id: int = Field(gt=0)
+    sales_date: date
+    source: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=240)
+
+    @field_validator("sales_date", mode="before")
+    @classmethod
+    def historical_date(cls, value):
+        return HistoricalSaleInput.historical_date(value)

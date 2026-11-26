@@ -235,6 +235,8 @@ You must follow these rules:
 - Never invent or independently calculate replacement forecasts.
 - Explain daily, weekly, and monthly demand when available.
 - Explain that forecasts are based on tracked sales history.
+- Tracked history may use imported historical and operational sales on separate product/date pairs.
+- Imported transactions do not imply complete daily tracking; only explicit coverage enables observed demand.
 - State when insufficient historical data prevents forecasting.
 
 4. RESTOCK RECOMMENDATIONS

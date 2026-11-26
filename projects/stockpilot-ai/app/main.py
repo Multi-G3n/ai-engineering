@@ -12,8 +12,8 @@ from app.ai_service import (
     ask_inventory_assistant,
     build_inventory_snapshot,
 )
-from fastapi import Depends, FastAPI, Form, Request, Header
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, Request, Header, File, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -23,13 +23,16 @@ from sqlalchemy.orm import Session
 
 from app.forecasting import build_forecast_report
 from app.database import get_db
-from app.models import InventoryMovement, Product, SalesRecord
+from app.models import HistoricalSale, HistoricalSalesCoverage, InventoryMovement, Product, SalesRecord, SalesImportBatch
 from app.config import session_cookie_secure, session_secret_key
-from app.schemas import AdjustmentInput, ProductInput, SaleInput, SalesTrackingInput
+from app.schemas import AdjustmentInput, ProductInput, SaleInput, SalesTrackingInput, HistoricalCoverageInput
+from app.sales_import import (ImportBodyLimitMiddleware, MAX_FILE_BYTES, SalesImportError,
+                              preview_csv, sign_preview, read_preview, execute_import, declare_historical_coverage)
 from app.services import (
     DuplicateSKUError,
     DuplicateSaleError,
     DemandRangeError,
+    SalesOverlapError,
     InsufficientStockError,
     InvalidAdjustmentError,
     ProductNotFoundError,
@@ -55,6 +58,7 @@ app.add_middleware(
     https_only=session_cookie_secure(),
 )
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.add_middleware(ImportBodyLimitMiddleware)
 templates = Jinja2Templates(directory=ROOT / "templates")
 
 
@@ -257,7 +261,7 @@ def create_sale_route(request: Request, product_id: str = Form(...), quantity_so
         today = date.today()
         return sales_context(request, db, selected_id, today - timedelta(days=13), today,
                              sale_error=error, form_values=form_values)
-    except (InsufficientStockError, ProductNotFoundError, DuplicateSaleError) as exc:
+    except (InsufficientStockError, ProductNotFoundError, DuplicateSaleError, SalesOverlapError) as exc:
         today = date.today()
         product_value = form_values.get("product_id")
         selected_id = int(product_value) if product_value.isdigit() else None
@@ -280,13 +284,88 @@ def mark_sales_coverage_route(request: Request, product_id: str = Form(...), sal
         selected_id = int(product_id) if product_id.isdigit() else None
         today = date.today()
         return sales_context(request, db, selected_id, today - timedelta(days=13), today, tracking_error=error)
-    except ProductNotFoundError as exc:
+    except (ProductNotFoundError, SalesOverlapError) as exc:
         today = date.today()
         selected_id = int(product_id) if product_id.isdigit() else None
         return sales_context(request, db, selected_id, today - timedelta(days=13), today, tracking_error=str(exc))
     query = urlencode({"product_id": data.product_id, "start_date": data.sales_date.isoformat(),
                        "end_date": data.sales_date.isoformat()})
     return RedirectResponse(f"/sales?{query}", status_code=303)
+
+
+def import_page_context(request, db, **context):
+    response = render(request, "sales_import.html",
+                  products=db.scalars(select(Product).order_by(Product.name)).all(),
+                  batches=db.scalars(select(SalesImportBatch).order_by(SalesImportBatch.id.desc()).limit(20)).all(),
+                  historical_rows=db.execute(select(HistoricalSale, Product.sku, SalesImportBatch.source)
+                      .join(Product, HistoricalSale.product_id == Product.id)
+                      .join(SalesImportBatch, HistoricalSale.import_batch_id == SalesImportBatch.id)
+                      .order_by(HistoricalSale.id.desc()).limit(50)).all(),
+                  coverage_rows=db.execute(select(HistoricalSalesCoverage, Product.sku)
+                      .join(Product, HistoricalSalesCoverage.product_id == Product.id)
+                      .order_by(HistoricalSalesCoverage.id.desc()).limit(20)).all(),
+                  **context)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/sales/import", response_class=HTMLResponse, dependencies=[Depends(require_authenticated_user)])
+def historical_import_page(request: Request, db: Session = Depends(get_db)):
+    return import_page_context(request, db)
+
+
+@app.get("/sales/import/template", dependencies=[Depends(require_authenticated_user)])
+def historical_import_template():
+    return Response("\ufeffexternal_sale_id,sale_date,sku,quantity,unit_price\r\n", media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="stockpilot-historical-sales-template.csv"'})
+
+
+@app.post("/sales/import/preview", response_class=HTMLResponse,
+          dependencies=[Depends(require_authenticated_user), Depends(require_csrf)])
+def historical_import_preview(request: Request, source: str = Form(...), file: UploadFile = File(...),
+                              db: Session = Depends(get_db)):
+    request.session.pop("sales_import_nonce", None)
+    try:
+        content = file.file.read(MAX_FILE_BYTES + 1)
+        preview = preview_csv(db, content, file.filename or "upload.csv", source)
+        token = None
+        if preview.can_import:
+            nonce = str(uuid4())
+            request.session["sales_import_nonce"] = nonce
+            token = sign_preview(content, preview.filename, source, request.session["user_id"], nonce)
+        return import_page_context(request, db, preview=preview, preview_token=token)
+    except SalesImportError as exc:
+        return import_page_context(request, db, error=str(exc), status_code=400)
+    finally:
+        file.file.close()
+
+
+@app.post("/sales/import/confirm", response_class=HTMLResponse,
+          dependencies=[Depends(require_authenticated_user), Depends(require_csrf)])
+def historical_import_confirm(request: Request, preview_token: str = Form(...), db: Session = Depends(get_db)):
+    try:
+        payload = read_preview(preview_token, request.session["user_id"], request.session.get("sales_import_nonce"))
+        batch = execute_import(db, user_id=request.session["user_id"], **payload)
+        request.session.pop("sales_import_nonce", None)
+        return import_page_context(request, db, result=batch)
+    except SalesImportError as exc:
+        request.session.pop("sales_import_nonce", None)
+        return import_page_context(request, db, error=str(exc), status_code=400)
+
+
+@app.post("/sales/import/coverage", response_class=HTMLResponse,
+          dependencies=[Depends(require_authenticated_user), Depends(require_csrf)])
+def historical_import_coverage(request: Request, product_id: str = Form(...), sales_date: str = Form(...),
+                               source: str = Form(...), reason: str = Form(...), db: Session = Depends(get_db)):
+    try:
+        data = HistoricalCoverageInput(product_id=product_id, sales_date=sales_date, source=source, reason=reason)
+        changed = declare_historical_coverage(db, **data.model_dump(), user_id=request.session["user_id"])
+        return import_page_context(request, db, message="Historical date marked complete." if changed else "Historical date was already complete.")
+    except ValidationError:
+        return import_page_context(request, db, error="Select a product, a date before today, a source and a verification reason within the displayed limits.", status_code=400)
+    except SalesImportError as exc:
+        return import_page_context(request, db, error=str(exc), status_code=400)
 
 
 @app.get("/login", response_class=HTMLResponse)
