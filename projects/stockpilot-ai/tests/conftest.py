@@ -2,12 +2,24 @@ import os
 import re
 import secrets
 
+import pytest
+
+# Test-only settings are generated per pytest process and never serve as app defaults.
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["STOCKPILOT_SECRET_KEY"] = secrets.token_urlsafe(48)
+os.environ["STOCKPILOT_COOKIE_SECURE"] = "true"
+os.environ["GEMINI_API_KEY"] = "test-only-not-a-live-api-key"
+
 from app.models import User
 from app.security import hash_password, login_rate_limiter
 
-# Test-only settings are generated per pytest process and never serve as app defaults.
-os.environ["STOCKPILOT_SECRET_KEY"] = secrets.token_urlsafe(48)
-os.environ["STOCKPILOT_COOKIE_SECURE"] = "true"
+
+@pytest.fixture(autouse=True)
+def block_live_gemini(monkeypatch):
+    def forbidden_client(*_args, **_kwargs):
+        raise AssertionError("Tests must mock Gemini; live requests are forbidden.")
+
+    monkeypatch.setattr("google.genai.Client", forbidden_client)
 
 TEST_USERNAME = "test-admin"
 TEST_PASSWORD = "test-only-password-2026"

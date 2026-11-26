@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from app import backup_db
+from app import config
 
 
 def create_source(path):
@@ -16,6 +17,7 @@ def configure_relative_source(monkeypatch, tmp_path):
     source = tmp_path / "source.db"
     create_source(source)
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./source.db")
     return source
 

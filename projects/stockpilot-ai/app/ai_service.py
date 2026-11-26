@@ -1,13 +1,12 @@
 
 import json
-import os
 from datetime import date
 
-from dotenv import load_dotenv
 from google import genai
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import gemini_api_key, gemini_model
 from app.models import Product
 from app.services import simple_demand_forecast
 from app.forecasting import (
@@ -20,8 +19,6 @@ from app.forecasting import (
 # ============================================================
 # CONFIGURATION
 # ============================================================
-
-load_dotenv()
 
 MAX_PRODUCTS = 50
 
@@ -234,7 +231,7 @@ def ask_inventory_assistant(
     # API CONFIGURATION
     # ========================================================
 
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = gemini_api_key()
 
     if not api_key:
         raise AIServiceError(
@@ -344,10 +341,7 @@ You must follow these rules:
     try:
 
         response = client.models.generate_content(
-            model=os.getenv(
-                "GEMINI_MODEL",
-                "gemini-3.1-flash-lite",
-            ),
+            model=gemini_model(),
             contents=prompt,
             config={
                 "temperature": 0.2,

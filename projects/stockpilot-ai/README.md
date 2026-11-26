@@ -18,7 +18,7 @@ The forecasting module calculates average daily demand from explicitly tracked s
 
 **3. Restocking Recommendations**
 
-The application calculates estimated demand, stock coverage and suggested reorder quantities using configurable lead-time and safety-stock assumptions.
+The application calculates estimated demand, stock coverage and suggested reorder quantities using lead-time and safety-stock arguments in Python (currently seven days each; no configuration UI).
 
 **4. Inventory and Sales Management**
 
@@ -60,9 +60,7 @@ FastAPI Application
 
 ## Verification
 
-Latest local test result:
-
-**58 passed, 1 warning**
+Latest Phase 5.1 verification: **71 passed, 1 warning** (58 baseline cases plus 13 configuration and operational consistency cases). The remaining warning is the existing Starlette/httpx deprecation warning. Run the full suite using the command below to verify your environment.
 
 The automated tests cover inventory workflows, sales tracking, forecasting and AI assistant integration. Mocked AI tests verify application behavior independently of live Gemini API availability.
 
@@ -96,25 +94,47 @@ python --version
 python -m pip install -r .\projects\stockpilot-ai\requirements.txt
 ```
 
-If PowerShell blocks activation, use the environment's interpreter directly in the commands below. `fastapi`, `SQLAlchemy`, `Jinja2`, and `uvicorn` were already installed in the inspected environment. `pytest`, `python-multipart`, and `httpx` may need installation from `requirements.txt`.
+Use the repository-root environment at `C:\Users\User\ai-engineering\.venv`, not the separate `.venv` inside the project. Activation is optional; from the repository root you can install directly with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\projects\stockpilot-ai\requirements.txt
+```
+
+No upgrade flag is required. The added dependencies are pinned to the versions verified in this environment: `google-genai==2.34.0` and `python-dotenv==1.2.4`. Existing dependency ranges are unchanged; no ML libraries are required.
 
 ## Configure and initialize
 
-The app defaults to `stockpilot.db` in the current working directory. Set `DATABASE_URL` in PowerShell to choose another SQLite location. `.env.example` documents the variable; this milestone reads environment variables directly and does not load `.env` files.
+All entry points load `projects/stockpilot-ai/.env` through `app.config`, independently of the working directory. Existing process environment variables take precedence over `.env`, including explicitly empty values. Defaults apply only when a variable is absent. Configuration is loaded at process startup; restart after editing `.env`.
+
+For a new installation only, copy `.env.example` to `.env` if no `.env` exists. Never overwrite an existing configuration. Set a private, securely generated `STOCKPILOT_SECRET_KEY` of at least 32 characters; the example intentionally leaves it empty. Keep that key stable across restarts. Set `STOCKPILOT_COOKIE_SECURE=false` only for local HTTP; production defaults to secure cookies and requires HTTPS.
+
+| Variable | Requirement / default |
+|---|---|
+| `DATABASE_URL` | Optional; `sqlite:///./stockpilot.db` |
+| `STOCKPILOT_SECRET_KEY` | Required for the web app; no default |
+| `STOCKPILOT_COOKIE_SECURE` | Optional; `true` |
+| `GEMINI_API_KEY` | Required only for AI answers; no default |
+| `GEMINI_MODEL` | Optional; `gemini-3.1-flash-lite` |
+
+Default and relative SQLite file paths now resolve against the **StockPilot project directory**, consistently for the web app, backups and Alembic. Absolute database URLs remain unchanged. In-memory URLs and explicit SQLite URI filenames retain their semantics.
+
+**Compatibility:** if you previously launched from another directory with a relative database URL, set an explicit absolute `DATABASE_URL` pointing to your existing database before running any write command. This milestone does not move or modify that database.
+
+After configuring a new installation, initialize it explicitly. For an existing database, follow the backup procedure below before upgrading:
 
 ```powershell
 Set-Location C:\Users\User\ai-engineering\projects\stockpilot-ai
 $env:DATABASE_URL = "sqlite:///./stockpilot.db"
-python -m app.init_db
+..\..\.venv\Scripts\python.exe -m app.init_db
 ```
 
 The database is initialized explicitly and is never seeded on startup. To add example products and their opening inventory movements, run:
 
 ```powershell
-python -m app.seed
+..\..\.venv\Scripts\python.exe -m app.seed
 ```
 
-The seed command is safe to repeat: it adds the sample catalog only when the database has no products.
+The seed command runs migrations and adds the sample catalog only when the database has no products. Use it only when you want sample products; it does not generate sales history.
 
 ## Run
 
@@ -123,7 +143,21 @@ Set-Location C:\Users\User\ai-engineering\projects\stockpilot-ai
 ..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000>. If you activated the environment from the repository root, `python -m uvicorn app.main:app --reload` also works.
+Create an administrator using `..\..\.venv\Scripts\python.exe -m app.create_admin` after initialization, then open <http://127.0.0.1:8000>. The command prompts for credentials without echoing the password; no default account exists.
+
+From the repository root, the web app can also be launched with:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir .\projects\stockpilot-ai --reload
+```
+
+Configuration is independent of working directory; Python still needs the project on its import path. Run `python -m app.<utility>` from the project directory, or provide that directory through `PYTHONPATH` when invoking utilities elsewhere.
+
+## Gemini configuration
+
+Provide your Gemini API key through `GEMINI_API_KEY` in the hosting environment or the project `.env`. Optionally override `GEMINI_MODEL` with a model available to your account. Never put keys in source control or shell examples. Inventory pages and deterministic forecasting work without an API key; AI chat reports that the key is not configured.
+
+The assistant sends a snapshot of up to 50 products and the user question to Google Gemini. Python computes all demand and reorder quantities; Gemini explains those supplied results. Model availability and account permissions are not verified by the offline tests.
 
 ## Test
 
@@ -146,9 +180,9 @@ Set-Location C:\Users\User\ai-engineering\projects\stockpilot-ai
 ..\..\.venv\Scripts\python.exe -m app.init_db
 ```
 
-This uses SQLAlchemy `create_all`: it adds the new tables without changing existing product or movement rows. No sales demo data is generated. The existing `app.seed` command adds sample products only when the catalog is empty; it does not create sales records.
+The current `app.init_db` command runs Alembic upgrades, not a standalone `create_all` initialization. Back up existing databases before applying upgrades as described below. No sales demo data is generated. The existing `app.seed` command adds sample products only when the catalog is empty; it does not create sales records.
 
-Open <http://127.0.0.1:8000/sales> to enter sales and review daily summaries. Each product/date must be explicitly marked fully tracked before its total is presented as observed demand. You can mark a verified no-sale date as complete, which records demand as zero. A date without this marker remains unknown; any sale quantity on an incomplete date is shown as a recorded partial total, not as complete demand. No forecasting model is included in this milestone.
+Open <http://127.0.0.1:8000/sales> to enter sales and review daily summaries. Each product/date must be explicitly marked fully tracked before its total is presented as observed demand. You can mark a verified no-sale date as complete, which records demand as zero. A date without this marker remains unknown; any sale quantity on an incomplete date is shown as a recorded partial total, not as complete demand. The current application also provides the deterministic forecasting baseline described below; no trained ML model is included.
 
 Run the full test suite, including sales transaction, data coverage, persistence, and existing inventory tests, with:
 
@@ -160,7 +194,7 @@ Run the full test suite, including sales transaction, data coverage, persistence
 
 - **`No module named ...`**: activate the repository `.venv` and install `requirements.txt` as shown above.
 - **`Form data requires "python-multipart"`**: install project requirements; this package is needed for HTML form handling.
-- **Database location looks unexpected**: SQLite's relative URL is relative to the process working directory. Set `DATABASE_URL` to an absolute SQLite URL or start the app from the project folder.
+- **Database location looks unexpected**: relative SQLite paths resolve from the StockPilot project directory. To retain a database previously selected from another directory, set an absolute `DATABASE_URL`.
 - **PowerShell activation is blocked**: skip activation and invoke `..\..\.venv\Scripts\python.exe` directly.
 - **Port 8000 is busy**: add `--port 8001` to the Uvicorn command.
 
@@ -199,7 +233,13 @@ Install the added migration dependency and run tests from the project directory:
 
 Migration tests build disposable SQLite databases and do not upgrade the application's configured database.
 
-Relative SQLite URLs currently resolve from the process working directory for the application, backup, and Alembic commands. The backup utility reports the resolved source path so the operator can verify the target. A future project-root strategy could resolve relative SQLite paths against the project directory in shared configuration, with explicit absolute URLs continuing to take precedence. Adopting that strategy would change which database is selected when commands are launched outside the project directory; it should be a separately reviewed compatibility change with tests for both working-directory cases before rollout. For now, use an explicit absolute `DATABASE_URL` or launch commands from the project directory.
+Phase 5.1 resolves relative SQLite paths from the project directory for every entry point. The backup utility prints the absolute source and destination for verification. From another directory, direct Alembic invocation must identify its configuration file, for example from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c .\projects\stockpilot-ai\alembic.ini upgrade head
+```
+
+This is a write operation: back up and verify the selected database first. Alembic configuration wiring uses the shared resolver; migration revisions and schemas are unchanged by Phase 5.1.
 
 ## Milestone 3B: Authentication and form security
 
@@ -221,6 +261,25 @@ The backup and migration commands above are explicit; application startup does n
 The session cookie is HTTP-only, SameSite=Lax, secure by default, and expires after eight hours. Login and logout as well as all product, stock, sales, and coverage forms require a session CSRF token. Login failures use the same message for unknown users and incorrect passwords. A process-local limiter allows five failed attempts per client address in a 15-minute window and temporarily blocks further attempts. It is not shared between multiple workers or machines; use a shared proxy/application rate limiter before running multiple workers. Account recovery, password reset, multi-factor authentication, and a web-based account-management page are not included.
 
 Run all tests (they configure isolated temporary SQLite databases and test-only credentials):
+
+```powershell
+..\..\.venv\Scripts\python.exe -m pytest
+```
+
+
+## Existing forecasting baseline
+
+The daily estimate is total sales on fully tracked days divided by the number of those days, within the 28 days before today. At least seven complete days are required. Verified zero-sale days contribute zero; incomplete days are excluded rather than assumed zero. Weekly demand is the daily estimate multiplied by seven. The forecast report rounds seven-day and thirty-day demand upward to whole units.
+
+Reorder quantity is `max(0, max(minimum_stock, ceil(daily_demand * (lead_time_days + safety_stock_days))) - current_stock)`. Current planning defaults are seven lead-time days and seven safety-stock days, passed as Python arguments. There are no supplier-specific settings or planning environment variables.
+
+These are deterministic calculations, not a trained machine-learning model. They do not account for trends, seasonality, holidays, stockouts or incoming orders. Historical sales import and ML training are future work; entering a sale through the current form always deducts current stock.
+
+## Phase 5.1 verification
+
+The suite sets test-only configuration before importing the application. Existing workflow tests use temporary SQLite databases, configuration tests use temporary `.env` files, and fresh-process entry-point tests run initialization, administrator creation, sample seeding and backup only against explicit temporary databases. Gemini client creation is blocked in tests; assistant responses remain mocked. No live Gemini request is needed.
+
+Run the complete suite from the project directory using the repository-root interpreter:
 
 ```powershell
 ..\..\.venv\Scripts\python.exe -m pytest
