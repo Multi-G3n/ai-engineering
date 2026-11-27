@@ -1,0 +1,3 @@
+# Generated demand datasets and local test scratch directories
+datasets/
+pipeline-*-tmp/

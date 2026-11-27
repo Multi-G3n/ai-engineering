@@ -465,6 +465,118 @@ The complete suite includes preview read-only checks, validation/BOM/limits, ded
 
 All 177 baseline cases are retained. Expected-head/chain assertions advance to `20261126_6`. The legacy-head fixture now uses the frozen five-table Phase 5.3 schema rather than today's evolving metadata, so it continues to represent an actual pre-import installation. Original data-preservation assertions remain. No baseline tests were removed.
 
+## Phase 7: retrospective demand data pipeline
+
+The additive `app/data_pipeline` package separates snapshot extraction, daily transformation,
+source/dataset validation, feature engineering and export. It does not call operational sale,
+historical import, inventory movement, forecasting or Gemini paths. No dependencies or migrations
+are added; migration head remains `20261126_6`. SQLite extraction uses one explicit read transaction
+with `query_only` enabled, and detached source values. No current inventory or current selling
+price is treated as historical data. The supported source backend is SQLite only.
+This initial implementation loads source tables into memory before selection/aggregation;
+large archives will need bounded snapshot extraction in a later phase. It does not create
+or migrate a missing source database. Validation failures produce no dataset export.
+
+Run from the project directory, using the existing Python environment:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m app.data_pipeline --help
+# Select an existing source database with the existing DATABASE_URL configuration.
+# Use a NEW output directory whose parent already exists.
+..\..\.venv\Scripts\python.exe -m app.data_pipeline --start-date 2026-01-01 --end-date 2026-02-11 --as-of-date 2026-02-12 --sku SP-1001 --output-dir datasets/review-01 --min-complete-days 28
+```
+
+Omit `--sku` to select all products. Start/end are inclusive; the as-of date is exclusive
+and cannot be in the future. Requested ends at/after as-of are clipped. Ranges are limited
+to 3,660 days. Calendar dates follow the existing application's `date.today()` convention
+(host local date, with no timezone conversion of stored sale dates). Generation timestamps
+are UTC. Use explicit as-of dates for reproducibility.
+
+`daily_demand.csv` contains `product_id`, `sku` (explicitly current metadata), `date`,
+`units_sold`, `sales_value`, `transaction_count`, `observed_units_sold`,
+`observed_sales_value`, `observed_transaction_count`, `coverage_status`, `data_source`,
+and `is_complete_day`. Rows sort by product ID then date. The observation period begins
+at the earliest known product creation date, sale or coverage assertion, clipped to the
+requested range. Imported history may precede application product creation. Existence
+does not establish product availability. Products with no rows still appear in readiness.
+
+Only explicit operational or matching-source historical coverage makes a complete target.
+Covered days without transactions are confirmed zero demand. Uncovered sales are `incomplete`:
+their diagnostic observed fields remain populated but target quantity/value/count remain null.
+Uncovered days without sales are `unknown`, with null targets and diagnostics. CSV nulls
+are empty cells; they must never be interpreted as zero. Money aggregates original recorded
+prices using Decimal, formatted to two places. No product price substitution occurs.
+
+`demand_features.csv` adds Monday-zero day of week, day of month, month and weekend;
+`lag_1/7/14/28`; `rolling_mean_7/14/28`; `rolling_std_7/14/28`; and
+`completed_days_7/14/28`. Lags use exact calendar dates and complete demand targets.
+Rolling means and sample standard deviations (`ddof=1`) require the entire preceding
+calendar window to be complete. Otherwise they remain null. Coverage counts count known
+complete days; they do not imply that missing history was available. Up to 28 days before
+the requested start are extracted for feature warmup but excluded from exported rows.
+All demand features exclude the target day and run independently per product.
+
+`data_quality_report.json` reports products/rows, complete/confirmed-zero/incomplete/unknown
+days, missing targets, coverage percentages and validation issues. Source validation rejects
+unknown product IDs, invalid dates/quantities/money, missing import batches, overlapping
+operational/historical ownership, duplicate coverage and mismatched historical sources.
+Dataset validation checks duplicate product/date keys and gaps. Source errors fail generation
+before writing any dataset; structured errors are available as `DataQualityError.errors`.
+The CLI emits a safe generic failure without credentials. Missing coverage and records
+at/after as-of are warnings, with the latter excluded. Source checks cover selected products'
+records even outside the requested range; corrupted out-of-range history is not silently ignored.
+Undecodable database values also abort extraction without repair.
+
+Per-product readiness includes observed date bounds, completed-day and missing-target counts,
+coverage percentage, available non-null lag/rolling feature counts and an explicit configurable
+minimum complete-day threshold (`--min-complete-days`, default 28). This threshold is a data
+availability screen, not a universal training minimum. Actual ML readiness is not assessed;
+model-specific span, seasonality, missingness and evaluation requirements remain future work.
+
+`dataset_metadata.json` includes schema version, UTC generation timestamp, requested/effective
+date bounds, as-of date, selection, feature/coverage rules, row counts, SHA-256 of each CSV,
+and SHA-256 of the daily CSV bytes followed by the feature CSV bytes. Equivalent source values
+and parameters yield identical CSV/report contents; only generation time varies in metadata.
+Current SKU changes legitimately change dataset contents. Reports intentionally omit user,
+administrator, session, credential, filename and external transaction identity data.
+
+These exports are **retrospective**, not fully point-in-time-safe backtesting datasets.
+Operational `created_at`, import batch/row timestamps and coverage `marked_at` exist, but there
+is no complete revision history, historical SKU mapping, or guaranteed timestamped availability
+contract. Coverage verified later may therefore appear on earlier dates. As-of bounds sale
+dates; it does not reconstruct historical knowledge. Tests establish temporal isolation of
+demand feature arithmetic, not leakage-free historical information availability. No training
+or backtesting is implemented. Sales also cannot establish unconstrained demand during stockouts.
+
+Exports require a new directory, reject parent traversal and existing symlink/junction paths,
+and reserve the destination with atomic directory creation. There is no overwrite option.
+Use a trusted local parent directory with appropriate OS permissions; concurrent hostile path
+replacement is outside this local command's guarantees. I/O failure may leave a partial new
+directory; retain it for diagnosis and retry with a different destination. Formula-like CSV
+text is prefixed with an apostrophe for spreadsheet safety; metadata records this encoding.
+Only fixed export filenames are used. Generated `datasets/` and test scratch paths are ignored
+by Git; exports elsewhere require equivalent local ignore/access controls.
+
+For a safe, reproducible synthetic example (never reads the business database):
+
+```powershell
+New-Item -ItemType Directory -Path datasets -Force
+..\..\.venv\Scripts\python.exe -m app.data_pipeline.example --output-dir datasets/phase7-example
+```
+
+This creates a temporary SQLite database with 42 calendar days, verifies 41 complete days,
+six zero-sale days, one unknown day and a valid trailing 28-day feature, and exports the four
+files before disposing of the temporary database. Inspect the unknown January 11 target
+and empty rolling fields for windows containing that day. Repeating with a fresh output
+directory produces identical CSV bytes. The example uses ORM metadata only, since it tests
+dataset generation rather than migration ownership triggers; Phase 6 tests cover those triggers.
+
+The pipeline tests use synthetic temporary databases and retain all baseline assertions.
+They cover source extraction/ownership, missingness, decimal aggregation, date boundaries,
+warmup, calendar lags/windows/sample standard deviations, product isolation, target/future
+leakage, quality/readiness, empty exports, checksums, deterministic contents, safe paths
+and unchanged source snapshots. No baseline test assertion changes are required.
+
 ## Phase 5.1 verification
 
 The suite sets test-only configuration before importing the application. Existing workflow tests use temporary SQLite databases, configuration tests use temporary `.env` files, and fresh-process entry-point tests run initialization, administrator creation, sample seeding and backup only against explicit temporary databases. Gemini client creation is blocked in tests; assistant responses remain mocked. No live Gemini request is needed.
